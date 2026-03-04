@@ -1,4 +1,4 @@
-# Tesis Maestría - Predicción de Rendimiento de Arroz
+# Tesis Maestría - Agro
 
 ## Objetivo
 Analizar y predecir el rendimiento del arroz en Argentina utilizando modelos de regresión lineal y robusta.
