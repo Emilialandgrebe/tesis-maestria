@@ -59,7 +59,7 @@ def fetch_climate_data(
         print(f"Cargando datos locales desde {PARQUET_PATH}")
         return pd.read_parquet(PARQUET_PATH)
 
-    print(f"Descargando datos desde Open-Meteo ({start_date} → {end_date})...")
+    print(f"Descargando datos desde Open-Meteo ({start_date} a {end_date})...")
     params = {
         "latitude": lat,
         "longitude": lon,
