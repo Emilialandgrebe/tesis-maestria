@@ -2,6 +2,7 @@ requests
 pandas
 numpy
 scipy
+statsmodels
 matplotlib
 seaborn
 pyarrow
