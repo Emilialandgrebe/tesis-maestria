@@ -4,9 +4,9 @@
 
 ---
 
-## Estado actual del proyecto
+## (guia para seguir y  no olvidarme ideas!)
 
-### ✅ Módulo 0 — Análisis climático histórico (`notebooks/00_clima_historico.ipynb`)
+### Módulo 0 — Análisis climático histórico (`notebooks/00_clima_historico.ipynb`)
 
 | Análisis | Estado | Notas |
 |---|---|---|
@@ -26,7 +26,7 @@
 | Síntesis e interpretación agronómica | ✅ | Texto + limitaciones explícitas |
 | Parámetros calibrados → Módulo 1 | ✅ | Distribución seleccionada por AIC |
 
-### ✅ Módulo 1 — Simulación de Monte Carlo (`notebooks/01_monte_carlo.ipynb`)
+### Módulo 1 — Simulación de Monte Carlo (`notebooks/01_monte_carlo.ipynb`)
 
 | Análisis | Estado | Notas |
 |---|---|---|
@@ -247,4 +247,4 @@ arviz>=0.17        # Visualización de distribuciones posterior (Paso 4)
 
 ---
 
-*Última actualización: junio 2026*
+
