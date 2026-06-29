@@ -1,250 +1,175 @@
-# Plan de implementación — Tesis de Maestría
-## Aptitud agroclimática y modelo de negocio del pistacho en Jocolí, Mendoza
-**Universidad Austral · Maestría en Ciencia de Datos**
+# Notas de tesis — pistacho Jocolí
+Universidad Austral · Maestría en Ciencia de Datos
 
 ---
 
-## Estado actual del proyecto
+## Qué hay hecho
 
-### ✅ Módulo 0 — Análisis climático histórico (`notebooks/00_clima_historico.ipynb`)
+### Módulo 0 — análisis climático histórico
 
-| Análisis | Estado | Notas |
-|---|---|---|
-| Descarga y caché ERA5-Land (Open-Meteo) | ✅ | `src/data/climate_fetcher.py` |
-| Temperatura máxima media verano (ene–feb) | ✅ | Mann-Kendall + Sen's Slope + LOWESS + IC 95% |
-| Frecuencia días > 35/38/40 °C | ✅ | |
-| Boxplots de Tmax por década | ✅ | |
-| Anomalías respecto al período base 1990–2020 | ✅ | Sen's Slope + OMM |
-| GDD agosto–octubre (brotación) | ✅ | Base 10 °C, temperatura media horaria |
-| Déficit hídrico anual (ET₀ − P) | ✅ | Mann-Kendall + Sen's Slope |
-| Índice de aridez de De Martonne | ✅ | Clasificación automática |
-| Horas de frío (mayo–sep, umbral < 7 °C) | ✅ | Tendencia + umbral crítico 800 hs |
-| Validación distribución horas de frío | ✅ | Shapiro-Wilk + AIC (Normal / Log-normal / Gamma) |
-| Rachas máximas de calor > 38/40 °C | ✅ | |
-| Feature engineering consolidado (`df_features`) | ✅ | 11 variables anuales exportadas a parquet |
-| Matriz de correlación entre variables | ✅ | |
-| Síntesis e interpretación agronómica | ✅ | Texto + limitaciones explícitas |
-| Parámetros calibrados → Módulo 1 | ✅ | Distribución seleccionada por AIC |
+- Descarga de datos ERA5-Land desde Open-Meteo, caché en parquet local
+- Temperatura máxima media de verano (enero-febrero), con Mann-Kendall + Sen's Slope + LOWESS + IC 95%
+- Frecuencia de días extremos: > 35, > 38 y > 40 °C
+- Boxplots de Tmax por décadas y anomalías respecto al período base 1990-2020
+- GDD de agosto a octubre (período de brotación), base 10 °C
+- Déficit hídrico anual (ET0 - precipitación), con tendencia Mann-Kendall
+- Índice de aridez de De Martonne con clasificación automática
+- Horas de frío mayo-septiembre, umbral < 7 °C
+- Validación de la distribución de horas de frío: Shapiro-Wilk + comparación por AIC entre Normal, Log-normal y Gamma
+- Rachas máximas de días consecutivos con Tmax > 38 °C y > 40 °C
+- DataFrame `df_features` con 11 indicadores anuales, exportado a parquet
+- Matriz de correlación entre todas las variables
+- Síntesis agronómica con texto descriptivo en cada sección
 
-### ✅ Módulo 1 — Simulación de Monte Carlo (`notebooks/01_monte_carlo.ipynb`)
+### Módulo 1 — simulación de Monte Carlo
 
-| Análisis | Estado | Notas |
-|---|---|---|
-| Monte Carlo básico (10 000 iteraciones, 20 años) | ✅ | |
-| Variabilidad por horas de frío (función de transferencia) | ✅ | Pendiente: calibrar con Bayes (ver abajo) |
-| Vecería por cadena de Markov (alto/bajo) | ✅ | Pendiente: calibrar parámetros |
-| Falla de plantas (distribución Beta) | ✅ | |
-| Precio por distribución triangular (3 escenarios) | ✅ | |
-| Gráficos percentiles P10/P50/P90 | ✅ | |
-| Distribución del VAN al año 20 | ✅ | **⚠ VAN solo de ingresos brutos — sin costos** |
-| Comparación de escenarios de precio | ✅ | |
+- 10.000 iteraciones, horizonte de 20 años
+- Cuatro fuentes de variabilidad combinadas:
+  - horas de frío con función de transferencia (penalidad si < 800 hs, sin penalidad si >= 1.000 hs)
+  - vecería modelada como cadena de Markov binaria (año alto / año bajo)
+  - falla de plantas con distribución Beta
+  - precio con distribución triangular, tres escenarios (pesimista / base / optimista)
+- Gráficos de percentiles P10 / P50 / P90 por año
+- Distribución del VAN al año 20 por escenario
 
 ---
 
-## ⚠ Problemas críticos a resolver ANTES de la defensa
+## Problemas que hay que resolver antes de la defensa
 
-### 1. El VAN no es real — falta el módulo de costos
-**Problema:** El modelo calcula `VAN = ingresos_brutos × factor_descuento`. Esto sobreestima el retorno real entre 3× y 5×. No es un modelo de negocio, es un modelo de ingresos.
+### El VAN es solo de ingresos brutos, no es un modelo de negocio
 
-**Lo que hay que agregar en `src/monte_carlo.py`:**
-```
-Inversión inicial (año 0):  ~USD 18.000/ha
-  - Preparación del terreno: ~4.000/ha
-  - Plantines + plantación:  ~8.000/ha
-  - Sistema de riego:        ~6.000/ha
+Esto es lo más urgente. Ahora el modelo calcula ingresos x precio x hectáreas y lo descuenta. No hay costos. Un jurado con formación financiera lo detecta de inmediato.
 
-Costos fijos anuales:       ~USD 1.500/ha
-  - Mano de obra permanente
-  - Mantenimiento riego
-  - Seguros y administración
+Lo que falta modelar:
+- Inversión inicial en año 0 (plantines, sistema de riego, preparación del suelo) — alrededor de USD 18.000/ha
+- Costos fijos anuales (mano de obra, mantenimiento, seguros) — alrededor de USD 1.500/ha/año
+- Costos variables desde el año 6 en adelante (cosecha, procesamiento, insumos) — alrededor de USD 800/ha/año
 
-Costos variables (desde año 6): ~USD 800/ha
-  - Cosecha y procesamiento: ~400/ha
-  - Insumos (fertilizantes, fitosanitarios): ~400/ha
-```
+Con eso se puede calcular VAN neto, TIR y período de recupero. Sin esto el número que sale no significa nada.
 
-**Resultado esperado:** VAN del flujo de caja neto, tasa de retorno interna (TIR), período de recupero.
+### No hay análisis de sensibilidad
 
----
+No se sabe qué variable mueve más el VAN. ¿Es el precio? ¿Las horas de frío? ¿La vecería? Eso hay que demostrarlo, no suponerlo.
 
-### 2. Sin análisis de sensibilidad
-**Problema:** No se sabe qué variable mueve más el resultado. ¿Es el precio? ¿Las horas de frío? ¿La vecería?
+Lo que falta:
+- Tornado chart: varía cada parámetro uno a la vez mientras los demás están fijos
+- Índices de Sobol S1 y ST: mide qué fracción de la varianza total del VAN explica cada variable, incluyendo interacciones
+- Librería a usar: SALib
 
-**Lo que hay que agregar:**
-- **Tornado chart:** varía cada parámetro ±20% mientras los demás se mantienen fijos. Muestra cuál tiene mayor impacto en el VAN.
-- **Índices de Sobol (primer orden + total):** estándar en análisis de incertidumbre para simulación. Cuantifica qué fracción de la varianza del VAN se explica por cada variable.
-- Librería: `SALib` (ya disponible en pip).
+### No hay reducción de varianza
 
----
+El programa de la materia lo pide explícitamente. La técnica es variables antitéticas: en lugar de generar U ~ Uniforme(0,1), se generan pares (U, 1-U). El estimador resultante tiene menos varianza con el mismo número de simulaciones. Hay que implementarlo y comparar la varianza con y sin la técnica.
 
-### 3. Sin reducción de varianza
-**Requerido por el programa de la materia.**
+### Los parámetros clave no tienen soporte bibliográfico
 
-**Variables antitéticas:** en vez de generar `U ~ Uniform(0,1)`, generar pares `(U, 1−U)`. El estimador de Monte Carlo con variables antitéticas tiene menor varianza con la misma cantidad de simulaciones.
-
-```python
-# Implementación conceptual en simulate_yields():
-u = rng.random((n // 2, T))
-u_antitetica = 1 - u
-u_total = np.vstack([u, u_antitetica])
-horas = stats.norm.ppf(u_total, loc=media, scale=std)
-```
+Algunos números que están en el código son supuestos que hay que citar o justificar:
+- Los factores de la función de transferencia de frío (0.40, 0.70, 1.00) — buscar en Ferguson (2006) o Ruiz et al. (2018)
+- Los parámetros de la cadena de Markov de vecería (p_bajo_si_alto = 0.65, p_alto_si_bajo = 0.80) — buscar en Polito & Pinney (1999) o datos INTA
+- La temperatura base GDD = 10 °C — Crane & Takeda (1979)
+- El umbral de 800 hs como crítico y 1.000 hs como óptimo — Goldhammer (1995)
+- La inversión inicial de USD 18.000/ha — necesita cotización real o fuente de INTA / plan de negocios
 
 ---
 
-## Plan de implementación — próximos pasos
+## Plan de implementación
 
-### Paso 1 — Módulo de costos (urgente)
-**Archivo:** `src/costos.py` (nuevo) + actualizar `src/monte_carlo.py`
+### Paso 1 — módulo de costos (empezar por acá)
 
-```python
-@dataclass
-class ParametrosCostos:
-    inversion_inicial_ha: float = 18_000   # USD/ha
-    costo_fijo_ha: float = 1_500           # USD/ha/año
-    costo_variable_ha: float = 800         # USD/ha/año (desde año 6)
-    año_inicio_costos_variables: int = 6
-```
+Crear `src/costos.py` con una dataclass `ParametrosCostos` y actualizar `src/monte_carlo.py` para que el VAN se calcule sobre el flujo de caja neto, no sobre los ingresos brutos.
 
-**Resultado:** reemplazar `van_acumulado_usd` por `van_neto_usd` en el DataFrame de salida.
+El flujo de cada año sería:
+- año 0: egresa la inversión inicial
+- años 1 a 5: solo costos fijos (no hay producción todavía)
+- años 6 a 20: ingresos - costos fijos - costos variables
 
----
+El resultado esperado es tener `van_neto_usd` en lugar de `van_acumulado_usd`, más la TIR y el año de recupero.
 
-### Paso 2 — Variables antitéticas (materia)
-**Archivo:** `src/monte_carlo.py` → nueva función `run_monte_carlo_antitetico()`
+### Paso 2 — variables antitéticas
 
-Comparar la varianza del estimador con y sin variables antitéticas para el mismo `n_simulaciones`.
+En `src/monte_carlo.py` agregar una función `run_monte_carlo_antitetico()`. La idea es simple: generar la mitad de las simulaciones con U y la otra mitad con 1-U, apilarlas y comparar la varianza del estimador resultante contra el Monte Carlo estándar con el mismo N.
 
----
+### Paso 3 — análisis de sensibilidad
 
-### Paso 3 — Análisis de sensibilidad (materia + tesis)
-**Archivo:** nuevo notebook `notebooks/02_sensibilidad.ipynb`
+Nuevo notebook `notebooks/02_sensibilidad.ipynb`:
+- primero el tornado chart (análisis local, un parámetro a la vez)
+- después los índices de Sobol con SALib (análisis global, captura interacciones entre variables)
 
-- Tornado chart (variación local, un parámetro a la vez)
-- Índices de Sobol S1 y ST (variación global, librería `SALib`)
-- Gráfico estándar en análisis de riesgo financiero
+### Paso 4 — inferencia Bayesiana con PyMC
 
----
+Nuevo notebook `notebooks/03_inferencia_bayesiana.ipynb`.
 
-### Paso 4 — Inferencia Bayesiana con PyMC (materia)
-**Archivo:** nuevo notebook `notebooks/03_inferencia_bayesiana.ipynb`
+El objetivo es reemplazar los supuestos ad hoc de los parámetros más inciertos por estimaciones con MCMC. Las candidatas:
+- los tres puntos de la función de transferencia de frío
+- los parámetros de transición de la cadena de Markov de vecería
 
-**Objetivo:** calibrar los parámetros más inciertos del modelo usando MCMC (Metropolis-Hastings o NUTS).
+Si se consiguen datos de más de una finca, se puede hacer un modelo jerárquico (pooling parcial). Eso sería el punto más sólido de la tesis desde el lado de Ciencia de Datos. Librería: pymc >= 5.0
 
-**Parámetros a inferir:**
-- Los factores de la función de transferencia de frío (`f(800hs)`, `f(1000hs)`)
-- Los parámetros de la cadena de Markov de vecería (`p_bajo_si_alto`, `p_alto_si_bajo`)
-- Si se consiguen datos de otras fincas: modelo jerárquico (pooling)
+### Paso 5 — SDE para trayectoria de biomasa (opcional, si da el tiempo)
 
-**Librería:** `pymc` (≥ 5.0)
+Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la deriva depende del GDD calculado en el Módulo 0. Se resuelve numéricamente con el esquema de Euler-Maruyama. Conecta el análisis climático con el rendimiento de forma continua en lugar de puntual.
+
+### Paso 6 — break-even y análisis de riesgo
+
+- Probabilidad de VAN < 0 por escenario
+- Distribución del año en que el VAN acumulado cruza cero
+- Probabilidad de recuperar la inversión antes del año 12, 15 y 20
+- Precio mínimo de venta para que el proyecto sea viable dado un escenario climático específico
 
 ---
 
-### Paso 5 — SDE para trayectoria de biomasa (opcional/avanzado)
-**Archivo:** `src/sde_biomasa.py` (nuevo)
+## Estructura de capítulos (borrador)
 
-Modelar el peso del fruto como proceso de Wiener geométrico:
-```
-dX(t) = μ·X(t)·dt + σ·X(t)·dW(t)
-```
-- `μ` determinista: depende de GDD (conecta con Módulo 0)
-- `σ` estocástico: variabilidad climática
-
-Resolver numéricamente con el esquema de Euler-Maruyama.
-
-**Valor para la tesis:** conecta el análisis climático (GDD) con el rendimiento de manera continua y dinámica, no puntual.
-
----
-
-### Paso 6 — Break-even y análisis de riesgo (tesis)
-- P(VAN < 0) por escenario
-- Período de recupero: distribución del año en que el VAN acumulado cruza cero
-- Probabilidad de recuperar la inversión antes del año 12 / 15 / 20
-- Curvas de nivel: precio mínimo de venta para que el proyecto sea viable dado cada escenario climático
-
----
-
-## Técnicas del programa de la materia — mapeo
-
-| Técnica del programa | Dónde aplicar | Prioridad |
-|---|---|---|
-| Monte Carlo + estimación E[g(X)] | `01_monte_carlo.ipynb` ✅ | — |
-| Variables antitéticas | Paso 2 | Alta |
-| Metropolis-Hastings / MCMC | Paso 4 (`03_inferencia_bayesiana.ipynb`) | Alta |
-| Modelo Bayesiano Jerárquico | Paso 4 (si hay datos de otras fincas) | Media |
-| SDE + Euler-Maruyama | Paso 5 (`src/sde_biomasa.py`) | Media |
-| Optimización Bayesiana (Procesos Gaussianos) | Paso 3 extendido (riego óptimo) | Baja |
-| Reinforcement Learning | No recomendado* | — |
-
-*RL requiere un entorno de simulación completo y datos de validación que no existen para este caso.
-El riesgo metodológico supera el beneficio para una tesis de Maestría.
+- Capítulo 1: introducción, contexto del cultivo en Argentina, justificación del modelo de negocio, objetivos
+- Capítulo 2: análisis agroclimático histórico (Módulo 0, ya hecho)
+  - datos y fuente ERA5-Land
+  - régimen térmico estival
+  - acumulación de frío invernal
+  - balance hídrico y aridez
+  - ingeniería de variables
+  - síntesis agronómica
+- Capítulo 3: modelo de simulación probabilística (Módulo 1, extender)
+  - estructura del Monte Carlo
+  - variables estocásticas y distribuciones
+  - reducción de varianza con variables antitéticas
+  - módulo de costos y VAN neto
+  - análisis de sensibilidad con índices de Sobol
+  - break-even y análisis de riesgo
+- Capítulo 4: inferencia Bayesiana (Módulo 3, nuevo)
+  - calibración de la función de transferencia de frío
+  - estimación de parámetros de vecería
+  - modelo jerárquico si se tienen datos de otras fincas
+- Capítulo 5 (opcional): SDE para trayectoria de biomasa
+- Capítulo 6: conclusiones y trabajo futuro
 
 ---
 
-## Estructura sugerida de la tesis
+## Técnicas del programa de la materia y dónde van
 
-```
-Capítulo 1 — Introducción
-  1.1 Contexto del cultivo de pistacho en Argentina
-  1.2 Justificación del modelo de negocio
-  1.3 Objetivos y alcance
-
-Capítulo 2 — Análisis agroclimático histórico  ← Módulo 0 ✅
-  2.1 Datos y fuente (ERA5-Land)
-  2.2 Régimen térmico estival
-  2.3 Acumulación de frío invernal
-  2.4 Balance hídrico y aridez
-  2.5 Ingeniería de variables e indicadores derivados
-  2.6 Síntesis agronómica
-
-Capítulo 3 — Modelo de simulación probabilística  ← Módulo 1 (extender)
-  3.1 Estructura del modelo de Monte Carlo
-  3.2 Variables estocásticas y distribuciones
-  3.3 Reducción de varianza: variables antitéticas
-  3.4 Módulo de costos y VAN neto
-  3.5 Análisis de sensibilidad (Sobol)
-  3.6 Break-even y análisis de riesgo
-
-Capítulo 4 — Inferencia Bayesiana  ← Módulo 3 (nuevo)
-  4.1 Calibración de la función de transferencia de frío
-  4.2 Estimación de parámetros de vecería
-  4.3 (Opcional) Modelo jerárquico multibloque
-
-Capítulo 5 — (Opcional) SDE para trayectoria de biomasa  ← Módulo avanzado
-  5.1 Formulación del proceso estocástico
-  5.2 Conexión con datos climáticos (GDD)
-  5.3 Distribución de trayectorias de producción
-
-Capítulo 6 — Conclusiones y trabajo futuro
-```
+- Monte Carlo + estimación E[g(X)] — ya está en el Módulo 1
+- Variables antitéticas — Paso 2
+- Metropolis-Hastings / MCMC — Paso 4
+- Modelo Bayesiano Jerárquico — Paso 4, si hay datos de otras fincas
+- SDE + Euler-Maruyama — Paso 5
+- Optimización Bayesiana con Procesos Gaussianos — no prioritario, si sobra tiempo
+- Reinforcement Learning — no recomendado para esta tesis, el riesgo metodológico es alto sin datos de validación
 
 ---
 
-## Notas de referencia bibliográfica pendiente
+## Librerías que hay que agregar a requirements.txt
 
-Estos números están en el código sin cita — hay que agregarlas antes de la defensa:
-
-| Parámetro | Valor usado | Referencia a buscar |
-|---|---|---|
-| Umbral horas de frío crítico | 800 hs | Goldhammer (1995), Crane & Takeda (1979) |
-| Umbral horas de frío sin penalidad | 1 000 hs | Idem |
-| Factores función de transferencia (0.40, 0.70, 1.00) | Ad hoc | Buscar en Ferguson (2006) o Ruiz et al. (2018) |
-| Parámetros vecería (0.65, 0.80) | Ad hoc | Polito & Pinney (1999) o datos INTA |
-| Temperatura base GDD pistacho | 10 °C | Crane & Takeda (1979) |
-| Umbral rango óptimo estival (35–38 °C) | — | Crane & Takeda (1979), Ferguson (2006) |
-| Inversión inicial 18 000 USD/ha | Estimación | Plan de negocios INTA o cotizaciones locales |
-| Umbral déficit hídrico 600 mm | Plan de negocios | Necesita cita o aclarar que es supuesto del modelo |
+- pymc >= 5.0 — inferencia Bayesiana
+- SALib >= 1.4 — análisis de sensibilidad Sobol
+- arviz >= 0.17 — visualización de distribuciones posterior
 
 ---
 
-## Librerías a agregar a `requirements.txt`
+## Cosas que no hay que olvidar
 
-```
-pymc>=5.0          # Inferencia Bayesiana (Paso 4)
-SALib>=1.4         # Análisis de sensibilidad Sobol (Paso 3)
-arviz>=0.17        # Visualización de distribuciones posterior (Paso 4)
-```
+- Agregar el .gitignore (hay un archivo sin commitear)
+- Citar todas las referencias bibliográficas de los parámetros antes de la defensa (ver sección de problemas)
+- Aclarar en el texto de la tesis que el VAN no incluye impuestos ni financiamiento
+- La curva de producción por año (del 1 al 20) también necesita una referencia o aclarar que es un supuesto del modelo
 
 ---
 
-*Última actualización: junio 2026*
+Última actualización: junio 2026
