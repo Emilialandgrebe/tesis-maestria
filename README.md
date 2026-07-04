@@ -1,5 +1,5 @@
 # Tesis de Maestría — Simulación de Rendimientos de Pistacho
-### Jocolí, Lavalle, Mendoza · Horizonte 20 años · 25 hectáreas
+### Jocolí, Lavalle, Mendoza · Horizonte 20 años · superficie configurable
 
 Modela la incertidumbre en los rendimientos de un cultivo de pistacho (variedad Kerman)
 combinando técnicas de simulación probabilística calibradas con datos climáticos históricos.

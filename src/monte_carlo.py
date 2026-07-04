@@ -8,12 +8,14 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
+
 # ---------------------------------------------------------------------------
 # Constantes del plan de negocios
 # ---------------------------------------------------------------------------
 
 HECTAREAS = 25.0
-RENDIMIENTO_PLENA_KG_HA = 4_500  # kg/ha en plena producción (año 12+)
+RENDIMIENTO_PLENA_KG_HA = 3_000  # kg/ha en plena producción (año 12+) — techo validado
 
 # Fracción del rendimiento pleno por año del proyecto (1–20)
 _CURVA_BASE: dict[int, float] = {
@@ -49,6 +51,11 @@ class ParametrosMC:
     # Horas de frío — calibrado desde PARAMS_CLIMA_JOCOLI (Módulo 0)
     horas_frio_media: float = 984.3
     horas_frio_std: float = 212.7
+
+    # Calor estival (tmax media diaria, enero-febrero) — calibrado con datos
+    # reales ERA5-Land / Open-Meteo 1990-2024 (Módulo 0, calcular_calor_verano)
+    calor_verano_media: float = 29.87
+    calor_verano_std: float = 1.98
 
     # Vecería: cadena de Markov sobre estado alto/bajo
     p_bajo_si_alto: float = 0.65   # P(año bajo | año previo fue alto)
@@ -95,6 +102,43 @@ def _factor_frio(horas: np.ndarray) -> np.ndarray:
     )
 
 
+def _factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
+    """
+    Función de transferencia: tmax media de verano (ene-feb) → factor de rendimiento.
+
+    Modela déficit de calor: el pistacho necesita temperaturas elevadas para
+    completar el llenado y la apertura de cáscara del fruto (Crane y Takeda, 1979;
+    Ferguson, 2006). Los datos reales ERA5-Land de Jocolí (1990-2024) muestran una
+    media histórica de 29.87 °C, por debajo del rango óptimo documentado (35-38 °C),
+    por lo que el escenario relevante en este sitio es la falta de calor, no el exceso.
+
+    Umbrales:
+    - >= 35 °C  : rango óptimo alcanzado, sin penalidad (factor = 1.00)
+    - 27.7–35 °C: penalidad lineal moderada (0.70–1.00)
+    - < 27.7 °C : año con déficit severo, penalidad fuerte (0.40–0.70)
+
+    El umbral de 27.7 °C corresponde al percentil 10 de la serie histórica
+    1990-2024 (no hay valor de corte con soporte bibliográfico específico;
+    pendiente de validación agronómica antes de la defensa).
+    """
+    UMBRAL_CALOR_OPTIMO = 35.0
+    UMBRAL_CALOR_CRITICO = 27.7
+    return np.clip(
+        np.where(
+            tmax_verano >= UMBRAL_CALOR_OPTIMO,
+            1.0,
+            np.where(
+                tmax_verano >= UMBRAL_CALOR_CRITICO,
+                0.70 + 0.30 * (tmax_verano - UMBRAL_CALOR_CRITICO)
+                / (UMBRAL_CALOR_OPTIMO - UMBRAL_CALOR_CRITICO),
+                0.40 + 0.30 * tmax_verano / UMBRAL_CALOR_CRITICO,
+            ),
+        ),
+        0.0,
+        1.0,
+    )
+
+
 def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
     Cadena de Markov binaria (año alto / año bajo) para modelar la alternancia.
@@ -129,11 +173,12 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     """
     Simula el rendimiento en kg/ha para cada iteración y año del proyecto.
 
-    Combina cuatro fuentes de variabilidad:
+    Combina cinco fuentes de variabilidad:
     1. Curva de maduración determinista (años 1–20)
     2. Vecería (alternancia productiva) — cadena de Markov
     3. Penalidad por horas de frío insuficientes — función de transferencia
-    4. Tasa de falla de plantas — Beta(alpha, beta)
+    4. Penalidad por déficit de calor estival (ene-feb) — función de transferencia
+    5. Tasa de falla de plantas — Beta(alpha, beta)
 
     Parámetros
     ----------
@@ -155,12 +200,17 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     factor_veceria = _simular_veceria(params, rng)
 
     horas = rng.normal(params.horas_frio_media, params.horas_frio_std, (n, T))
-    factor_clima = _factor_frio(horas)
+    factor_frio = _factor_frio(horas)
+
+    tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
+    factor_calor = _factor_calor(tmax_verano)
 
     # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
     supervivencia = 1.0 - rng.beta(params.plantas_alpha, params.plantas_beta, (n, 1))
 
-    return np.maximum(curva_base * factor_veceria * factor_clima * supervivencia, 0.0)
+    return np.maximum(
+        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    )
 
 
 def simulate_prices(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
@@ -190,23 +240,35 @@ def simulate_revenue(
     return yields_kg_ha * prices_usd_kg * hectareas
 
 
-def run_monte_carlo(params: ParametrosMC | None = None) -> pd.DataFrame:
+def run_monte_carlo(
+    params: ParametrosMC | None = None,
+    costos: ParametrosCostos | None = None,
+) -> pd.DataFrame:
     """
     Orquesta la simulación completa y retorna los resultados en formato tabular.
+
+    El VAN se calcula sobre el flujo de caja neto (ingresos - OPEX), no sobre
+    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0).
 
     Parámetros
     ----------
     params : ParametrosMC, opcional
-        Configuración del modelo. Si es None usa los valores por defecto.
+        Configuración del modelo de rendimientos. Si es None usa los valores
+        por defecto.
+    costos : ParametrosCostos, opcional
+        Configuración de costos (CAPEX/OPEX). Si es None usa los valores
+        por defecto, calibrados a 25 ha (ver src/costos.py).
 
     Retorna
     -------
     pd.DataFrame con columnas:
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
-        ingreso_usd, vp_usd, van_acumulado_usd
+        ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd
     """
     if params is None:
         params = ParametrosMC()
+    if costos is None:
+        costos = ParametrosCostos()
 
     rng = np.random.default_rng(params.semilla)
 
@@ -214,18 +276,106 @@ def run_monte_carlo(params: ParametrosMC | None = None) -> pd.DataFrame:
     prices  = simulate_prices(params, rng)
     revenue = simulate_revenue(yields, prices, params.hectareas)
 
+    flujo_neto = flujo_caja_neto(revenue, costos)
+
     años = np.arange(1, params.n_años + 1)
     factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
-    vp          = revenue * factores_descuento
-    van_acum    = np.cumsum(vp, axis=1)
+    vp_neto       = flujo_neto * factores_descuento
+    van_neto_acum = -costos.capex_inicial + np.cumsum(vp_neto, axis=1)
 
     n, T = yields.shape
+    opex_por_año = np.array(
+        [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
+    )
+
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
         "rendimiento_kg_ha": yields.ravel(),
         "precio_usd_kg":    prices.ravel(),
         "ingreso_usd":      revenue.ravel(),
-        "vp_usd":           vp.ravel(),
-        "van_acumulado_usd": van_acum.ravel(),
+        "opex_usd":         np.tile(opex_por_año, n),
+        "flujo_neto_usd":   flujo_neto.ravel(),
+        "vp_neto_usd":      vp_neto.ravel(),
+        "van_neto_usd":     van_neto_acum.ravel(),
+    })
+
+
+def _tir_vectorizada(
+    flujos_con_capex: np.ndarray,
+    tasa_inicial: float = 0.15,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> np.ndarray:
+    """
+    TIR de cada fila de `flujos_con_capex` (n_simulaciones, n_años + 1, con
+    el año 0 incluido) mediante Newton-Raphson vectorizado.
+
+    Retorna NaN en las filas que no convergen (p. ej. si el flujo nunca
+    cambia de signo, la TIR no está definida).
+    """
+    n, T = flujos_con_capex.shape
+    t = np.arange(T).reshape(1, T)
+    r = np.full(n, tasa_inicial)
+    convergio = np.zeros(n, dtype=bool)
+
+    for _ in range(max_iter):
+        denom = (1.0 + r.reshape(-1, 1)) ** t
+        npv = np.sum(flujos_con_capex / denom, axis=1)
+        dnpv = np.sum(
+            -t * flujos_con_capex / (1.0 + r.reshape(-1, 1)) ** (t + 1), axis=1
+        )
+        dnpv = np.where(np.abs(dnpv) < 1e-12, np.nan, dnpv)
+        paso = np.nan_to_num(npv / dnpv, nan=0.0)
+        r_nuevo = np.clip(r - paso, -0.99, 10.0)
+        convergio |= np.abs(r_nuevo - r) < tol
+        r = r_nuevo
+
+    return np.where(convergio, r, np.nan)
+
+
+def resumen_financiero(
+    df: pd.DataFrame, costos: ParametrosCostos | None = None
+) -> pd.DataFrame:
+    """
+    Resumen por simulación: VAN neto final, TIR y año de recupero.
+
+    Parámetros
+    ----------
+    df : pd.DataFrame
+        Salida de `run_monte_carlo()` (requiere columnas simulacion, año,
+        flujo_neto_usd, van_neto_usd).
+    costos : ParametrosCostos, opcional
+        Debe ser el mismo usado para generar `df` (para el CAPEX inicial).
+
+    Retorna
+    -------
+    pd.DataFrame con columnas: simulacion, van_neto_usd, tir, año_recupero.
+    `año_recupero` es NaN si el proyecto no recupera la inversión dentro
+    del horizonte simulado.
+    """
+    if costos is None:
+        costos = ParametrosCostos()
+
+    tabla_flujos = df.pivot(index="simulacion", columns="año", values="flujo_neto_usd")
+    n = tabla_flujos.shape[0]
+    flujos_con_capex = np.hstack([
+        np.full((n, 1), -costos.capex_inicial),
+        tabla_flujos.values,
+    ])
+
+    tir = _tir_vectorizada(flujos_con_capex)
+
+    acumulado = np.cumsum(flujos_con_capex, axis=1)
+    recupero_mask = acumulado >= 0
+    tiene_recupero = recupero_mask.any(axis=1)
+    año_recupero = np.where(tiene_recupero, recupero_mask.argmax(axis=1), np.nan)
+
+    van_neto_final = df.groupby("simulacion")["van_neto_usd"].last().values
+
+    return pd.DataFrame({
+        "simulacion":   tabla_flujos.index.values,
+        "van_neto_usd": van_neto_final,
+        "tir":          tir,
+        "año_recupero": año_recupero,
     })
