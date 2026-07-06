@@ -1,0 +1,31 @@
+categoria,item,unidad,cantidad,precio_unit_usd,total_usd,costeado,notas
+TIERRA,Finca,ha,100,6000,600000,SI,Valle de Uco ref. 2024-2025
+TIERRA,Analisis de suelo,analisis,1,513.12,513.12,SI,Laboratorio de Edafologia FCA-UNCU
+TIERRA,Analisis de agua,analisis,,,0,NO,Sin cotizar
+TIERRA,Desmonte / nivelacion,ha,50,,0,NO,Sin cotizar; terreno semidesbrozado
+TIERRA,Subsolado profundo,ha,25,,0,NO,Sin cotizar; hasta 80cm
+TIERRA,Marcacion,ha,,,0,NO,No es un costo significativo segun la fuente
+RIEGO,Pozo de agua (perforacion),unidad,2,,0,NO,Sin cotizar; profundidad ~80-150m
+RIEGO,Bombas y tablero electrico,unidad,2,,0,NO,Sin cotizar
+RIEGO,Filtros y fertilizadores,kit,1,,0,NO,Sin cotizar; fertirrigacion
+RIEGO,Tuberias principales y secundarias laterales y goteros,ha,25,,0,NO,Sin cotizar; PEAD 2 goteros/planta
+RIEGO,Represa o cisterna (5000 m3),unidad,1,,0,NO,Sin cotizar; regulacion nocturna
+PLANTAS,Plantas hembra (Kerman),planta,34500,9,310500,SI,
+PLANTAS,Plantas macho (Peters/Randy),planta,3000,9,27000,SI,
+PLANTAS,Tutores (cana/fibra 1.5 m),unidad,5000,1.5,7500,SI,
+MAQUINARIA,Tractor 90 HP,unidad,1,55000,55000,SI,Con cabina e hidraulico
+MAQUINARIA,Pulverizadora turbina 1000 L,unidad,1,12000,12000,SI,
+MAQUINARIA,Subsolador 3 cuerpos,unidad,1,4000,4000,SI,
+MAQUINARIA,Rastra 16 discos,unidad,1,3800,3800,SI,
+MAQUINARIA,Desmalezadora 1.5 m,unidad,1,4200,4200,SI,
+MAQUINARIA,Arado de discos,unidad,1,3500,3500,SI,
+INFRAESTRUCTURA,Paneles solares,unidad,,,0,NO,Sin cotizar
+INFRAESTRUCTURA,Galeria/galpon herramientas (200 m2),m2,200,250,50000,SI,Construccion sencilla
+INFRAESTRUCTURA,Sistema electrico finca,global,1,15000,15000,SI,Linea trifasica + tableros
+INFRAESTRUCTURA,Camino interno (ripio compactado),km,3,4000,12000,SI,
+INFRAESTRUCTURA,Alambrado perimetral,km,8,1500,12000,SI,
+INFRAESTRUCTURA,Red antigranizo (opcional Fase I),ha,,,0,NO,Sin cotizar; depende de la zona
+INFRAESTRUCTURA,Oficina/vivienda encargado,global,1,12000,12000,SI,Modulo prefabricado
+TECNOLOGIA,Software de gestion agricola,anio,,,0,NO,No indispensable
+TECNOLOGIA,Estacion meteorologica,unidad,,,0,NO,Sin cotizar
+TECNOLOGIA,Sitio web e-commerce,global,,,0,NO,Se haria internamente

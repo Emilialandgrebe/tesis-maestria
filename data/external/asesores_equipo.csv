@@ -1,0 +1,15 @@
+tipo,rol,institucion_referente,tipo_vinculo,costo_estimado,incluido_en_opex,aporte_al_proyecto
+equipo_interno,Director / Promotor,Hernan Landgrebe / Emilia Landgrebe,Full-time,Equity (sin sueldo inicial),NO,"Direccion estrategica, relacion inversores, comercial"
+equipo_interno,Encargado de Finca,A contratar (exp. en vid/olivo),Full-time,USD 1200-1400/mes,SI,"Produccion, MO, maquinaria, agua"
+equipo_interno,Asistente Administrativo,Sin definir,Sin definir,Sin costear,NO,"Contabilidad operativa, proveedores, RRHH"
+equipo_interno,Tecnico Comercial,Sin definir,Sin definir,Sin costear,NO,"Ventas, clientes, logistica comercial"
+equipo_interno,Operarios de campo,Temporarios + permanentes,Segun temporada,Ver OPEX mano de obra,SI,Labor diaria y cosecha
+asesor,Asesor Agronomico Pistacho,Canatella del Pistacho (Mendoza),Consultoria mensual,USD 300-500/mes,NO,"Manejo tecnico, portainjertos, poda"
+asesor,INTA Mendoza,EEA La Consulta / Rama Caida,Convenio I+D,Sin costo directo,NO,"Investigacion varietal, fitosanidad"
+asesor,Asesor Legal,Estudio juridico especializado agrario,Por proyecto,USD 2000/anio,NO,"SAS, contratos, derechos de agua"
+asesor,Contador / Asesor Impositivo,Estudio contable Mendoza,Mensual,USD 300-400/mes,SI (parcial),"Contabilidad, AFIP, DGI, exportacion"
+asesor,Especialista en Exportacion,Broker o despachante de aduana,Por operacion,% sobre valor FOB,NO,Exportacion en cascara/pelado
+asesor,Desarrollador Web,Proveedor TI,Proyecto + soporte,USD 800 set-up + 150/mes,NO,"E-commerce, presencia digital"
+asesor,Asociacion Frutos Secos Mendoza,Asociacion Frutos Secos,Membresia,USD 200/anio,NO,"Red comercial, ferias, informacion de mercado"
+asesor,Pistachos Mendoza S.A.,Productores existentes,Alianza tecnica-comercial,Variable,NO,Referencia y posible maquila de procesado
+asesor,Seguros Agropecuarios,Sancor Seguros / Federacion Patronal,Contrato anual,USD 3000-6000/anio,SI (parcial),"Cobertura granizo, helada, incendio"

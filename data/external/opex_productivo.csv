@@ -1,0 +1,27 @@
+categoria,item,unidad,cantidad,precio_unit_usd,total_usd,notas
+MANO DE OBRA,Encargado de finca,mes,1,1400,1400,Full-time con experiencia
+MANO DE OBRA,Operarios permanentes,mes,12.5,750,9375,Segun Facundo 1 persona cada 8 ha
+MANO DE OBRA,Cosechadores/podadores adicionales,jornal,,30,0,Solo trabajos adicionales e imprevistos; personal propio segun Patricio
+MANO DE OBRA,Poda de mantenimiento,jornal,40,25,1000,
+MANO DE OBRA,Aplicaciones fitosanitarias,jornal,25,25,625,
+FERTILIZACION,Nitrogeno (Urea 46%),kg,3500,0.45,1575,
+FERTILIZACION,Fosforo + Potasio,kg,2000,0.65,1300,
+FERTILIZACION,Micronutrientes y foliares,kg,500,3,1500,
+FERTILIZACION,Materia organica (compost),tn,50,80,4000,Aplicacion bianual
+FITOSANIDAD,Fungicidas,litro,150,12,1800,Lo aplica un miembro del equipo (sin costo de mano de obra adicional cargado)
+FITOSANIDAD,Insecticidas + acaricidas,litro,80,15,1200,Lo aplica un miembro del equipo (sin costo de mano de obra adicional cargado)
+FITOSANIDAD,Herbicidas,litro,100,8,800,Lo aplica un miembro del equipo (sin costo de mano de obra adicional cargado)
+COSECHA,Gasoil cosechadora (alquiler),hora,120,25,3000,
+COSECHA,Bins y envases,unidad,200,15,3000,Reutilizables
+PROCESADO,Maquila descascarado/secado,kg,112500,0.25,28125,No se justifica procesadora propia hasta ~300 ha
+PROCESADO,Transporte a planta procesadora,viaje,20,500,10000,
+COMBUSTIBLE,Gasoil tractor y maquinaria,litro,5000,0.9,4500,
+ADMINISTRACION,Contador,mes,12,400,4800,
+ADMINISTRACION,Servicios de escribania,,,,0,SIN COSTEAR EN LA FUENTE. Marcado como "muy importante" por los asesores agronomicos del proyecto
+ADMINISTRACION,Seguros (finca + maquinaria + cosecha),anio,1,6000,6000,
+ADMINISTRACION,"Impuestos, tasas, IIBB",anio,1,4000,4000,~2% de ingresos
+ADMINISTRACION,Marketing + e-commerce,mes,,,0,No prioritario segun la fuente
+ADMINISTRACION,Certificaciones (organico/BPA),anio,,,0,No prioritario segun la fuente
+MANTENIMIENTO,Mantenimiento maquinaria y riego,anio,1,8000,8000,
+MANTENIMIENTO,Renovacion planta (2%/anio),planta,100,4,400,
+FINANCIAMIENTO,Servicio deuda (capital+interes),anio,1,35000,35000,Asume financiamiento parcial via credito
