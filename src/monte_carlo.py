@@ -8,7 +8,9 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from scipy import integrate
+from scipy.stats import beta as beta_dist
 from scipy.stats import norm
+from scipy.stats import triang as triang_dist
 
 from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
 
@@ -148,6 +150,22 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
     )
 
 
+def _alpha_beta_por_media(
+    media: np.ndarray, precision: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Convierte una media objetivo y una precisión (kappa) a los parámetros
+    (alpha, beta) de una Beta reparametrizada por media. Usado tanto por
+    `_muestrear_beta_por_media` (muestreo directo con rng.beta) como por
+    `simulate_yields_antitetico` (muestreo vía beta.ppf de uniformes
+    antitéticos) — una sola fórmula, sin duplicar el clip ni el cálculo.
+    """
+    media = np.clip(media, 1e-4, 1 - 1e-4)
+    alpha = media * precision
+    beta = (1 - media) * precision
+    return alpha, beta
+
+
 def _muestrear_beta_por_media(
     media: np.ndarray, precision: float, rng: np.random.Generator
 ) -> np.ndarray:
@@ -158,9 +176,7 @@ def _muestrear_beta_por_media(
     kappa alto -> el factor se acerca al valor determinístico de `media`;
     kappa bajo -> más ruido biológico no explicado por el clima.
     """
-    media = np.clip(media, 1e-4, 1 - 1e-4)
-    alpha = media * precision
-    beta = (1 - media) * precision
+    alpha, beta = _alpha_beta_por_media(media, precision)
     return rng.beta(alpha, beta)
 
 
@@ -295,6 +311,128 @@ def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarr
 
 
 # ---------------------------------------------------------------------------
+# Reducción de varianza — variables antitéticas (PLAN_TESIS.md, Paso 2)
+# ---------------------------------------------------------------------------
+
+def _generar_uniformes_antiteticos(
+    n: int, shape_por_muestra: tuple[int, ...], rng: np.random.Generator
+) -> np.ndarray:
+    """
+    Genera `n` uniformes(0,1) usando variables antitéticas: la primera mitad
+    (filas 0 a n//2 - 1) son uniformes frescos U, la segunda mitad (filas
+    n//2 a n-1) son sus complementos 1-U, fila a fila emparejadas
+    (fila i <-> fila i + n//2). Esto induce correlación negativa entre cada
+    simulación y su par antitético, reduciendo la varianza del estimador
+    (la media) para el mismo N total de evaluaciones, sin cambiar el valor
+    esperado.
+
+    Si `n` es impar, la última fila queda como un uniforme fresco sin
+    pareja: no participa de la reducción de varianza, pero mantiene la
+    forma de salida en `n` filas.
+
+    Parámetros
+    ----------
+    n : int
+        Cantidad total de muestras a generar (pares + resto si es impar).
+    shape_por_muestra : tuple[int, ...]
+        Forma de cada muestra individual, p. ej. `(n_años,)` o `(1,)`.
+    rng : np.random.Generator
+
+    Retorna
+    -------
+    np.ndarray de forma (n, *shape_por_muestra), valores en (0, 1).
+    """
+    n_mitad = n // 2
+    u = rng.random((n_mitad, *shape_por_muestra))
+    pares = np.concatenate([u, 1.0 - u], axis=0)
+    if n % 2 == 1:
+        extra = rng.random((1, *shape_por_muestra))
+        pares = np.concatenate([pares, extra], axis=0)
+    return pares
+
+
+def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
+    """
+    Versión de `simulate_yields()` con reducción de varianza por variables
+    antitéticas. Mismas cinco fuentes de variabilidad y mismas distribuciones,
+    pero cada una se arma transformando uniformes antitéticos
+    (`_generar_uniformes_antiteticos`) vía la función inversa (PPF) de la
+    distribución correspondiente, en vez de muestrear directo con los
+    métodos de `np.random.Generator`.
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones, n_años) en kg/ha.
+    """
+    n, T = params.n_simulaciones, params.n_años
+
+    curva_base = np.array(
+        [CURVA_PRODUCCION[a] * params.rendimiento_plena for a in range(1, T + 1)]
+    ).reshape(1, T)
+
+    # --- Vecería: cadena de Markov, uniformes antitéticos aplicados en cada paso ---
+    u_estado = _generar_uniformes_antiteticos(n, (T,), rng)
+    u_magnitud = _generar_uniformes_antiteticos(n, (T,), rng)
+
+    es_bajo = np.zeros((n, T), dtype=bool)
+    es_bajo[:, 0] = u_estado[:, 0] < 0.5
+    for t in range(1, T):
+        p_bajo = np.where(
+            ~es_bajo[:, t - 1],
+            params.p_bajo_si_alto,
+            1.0 - params.p_alto_si_bajo,
+        )
+        es_bajo[:, t] = u_estado[:, t] < p_bajo
+
+    # Uniforme(min, max) = min + (max - min) * U -- PPF trivial, lineal
+    factores_bajos = (
+        params.veceria_factor_min
+        + (params.veceria_factor_max - params.veceria_factor_min) * u_magnitud
+    )
+    factor_veceria = np.where(es_bajo, factores_bajos, 1.0)
+
+    # --- Horas de frío ---
+    u_horas = _generar_uniformes_antiteticos(n, (T,), rng)
+    horas = norm.ppf(u_horas, loc=params.horas_frio_media, scale=params.horas_frio_std)
+    media_ff = _media_factor_frio(horas)
+    alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
+    u_frio = _generar_uniformes_antiteticos(n, (T,), rng)
+    factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
+
+    # --- Calor estival ---
+    u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
+    tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
+    media_fc = _media_factor_calor(tmax_verano)
+    alpha_fc, beta_fc = _alpha_beta_por_media(media_fc, params.precision_factor_calor)
+    u_calor = _generar_uniformes_antiteticos(n, (T,), rng)
+    factor_calor = beta_dist.ppf(u_calor, alpha_fc, beta_fc)
+
+    # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
+    u_supervivencia = _generar_uniformes_antiteticos(n, (1,), rng)
+    supervivencia = 1.0 - beta_dist.ppf(u_supervivencia, params.plantas_alpha, params.plantas_beta)
+
+    return np.maximum(
+        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    )
+
+
+def simulate_prices_antitetico(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
+    """
+    Versión de `simulate_prices()` con reducción de varianza por variables
+    antitéticas: transforma uniformes antitéticos vía la PPF de la
+    distribución triangular (scipy.stats.triang) en vez de `rng.triangular`.
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones, n_años).
+    """
+    low, mode, high = ESCENARIOS_PRECIO[params.escenario]
+    u = _generar_uniformes_antiteticos(params.n_simulaciones, (params.n_años,), rng)
+    c = (mode - low) / (high - low)  # parámetro de forma de scipy.stats.triang
+    return triang_dist.ppf(u, c, loc=low, scale=high - low)
+
+
+# ---------------------------------------------------------------------------
 # Funciones públicas
 # ---------------------------------------------------------------------------
 
@@ -373,6 +511,61 @@ def simulate_revenue(
     return yields_kg_ha * prices_usd_kg * hectareas
 
 
+def _resolver_params_costos(
+    params: ParametrosMC | None, costos: ParametrosCostos | None
+) -> tuple[ParametrosMC, ParametrosCostos]:
+    """
+    Aplica los defaults de `params`/`costos` y sincroniza `hectareas` entre
+    ambos. Usado tanto por `run_monte_carlo()` como por
+    `run_monte_carlo_antitetico()`.
+    """
+    if params is None:
+        params = ParametrosMC()
+    if costos is None:
+        costos = ParametrosCostos(hectareas=params.hectareas)
+    elif costos.hectareas != params.hectareas:
+        costos.hectareas = params.hectareas
+    return params, costos
+
+
+def _orquestar_resultado(
+    yields: np.ndarray,
+    prices: np.ndarray,
+    params: ParametrosMC,
+    costos: ParametrosCostos,
+) -> pd.DataFrame:
+    """
+    Arma el DataFrame de resultados (ingresos, OPEX, flujo neto, VAN neto) a
+    partir de arrays de rendimiento y precio ya simulados. Usado tanto por
+    `run_monte_carlo()` como por `run_monte_carlo_antitetico()` — la única
+    diferencia entre ambos es cómo se generan `yields` y `prices`.
+    """
+    revenue = simulate_revenue(yields, prices, params.hectareas)
+    flujo_neto = flujo_caja_neto(revenue, costos)
+
+    años = np.arange(1, params.n_años + 1)
+    factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
+    vp_neto       = flujo_neto * factores_descuento
+    van_neto_acum = -costos.capex_inicial + np.cumsum(vp_neto, axis=1)
+
+    n, T = yields.shape
+    opex_por_año = np.array(
+        [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
+    )
+
+    return pd.DataFrame({
+        "simulacion":       np.repeat(np.arange(n), T),
+        "año":              np.tile(años, n),
+        "rendimiento_kg_ha": yields.ravel(),
+        "precio_usd_kg":    prices.ravel(),
+        "ingreso_usd":      revenue.ravel(),
+        "opex_usd":         np.tile(opex_por_año, n),
+        "flujo_neto_usd":   flujo_neto.ravel(),
+        "vp_neto_usd":      vp_neto.ravel(),
+        "van_neto_usd":     van_neto_acum.ravel(),
+    })
+
+
 def run_monte_carlo(
     params: ParametrosMC | None = None,
     costos: ParametrosCostos | None = None,
@@ -400,42 +593,36 @@ def run_monte_carlo(
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
         ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd
     """
-    if params is None:
-        params = ParametrosMC()
-    if costos is None:
-        costos = ParametrosCostos(hectareas=params.hectareas)
-    elif costos.hectareas != params.hectareas:
-        costos.hectareas = params.hectareas
-
+    params, costos = _resolver_params_costos(params, costos)
     rng = np.random.default_rng(params.semilla)
 
-    yields  = simulate_yields(params, rng)
-    prices  = simulate_prices(params, rng)
-    revenue = simulate_revenue(yields, prices, params.hectareas)
+    yields = simulate_yields(params, rng)
+    prices = simulate_prices(params, rng)
 
-    flujo_neto = flujo_caja_neto(revenue, costos)
+    return _orquestar_resultado(yields, prices, params, costos)
 
-    años = np.arange(1, params.n_años + 1)
-    factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
-    vp_neto       = flujo_neto * factores_descuento
-    van_neto_acum = -costos.capex_inicial + np.cumsum(vp_neto, axis=1)
 
-    n, T = yields.shape
-    opex_por_año = np.array(
-        [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
-    )
+def run_monte_carlo_antitetico(
+    params: ParametrosMC | None = None,
+    costos: ParametrosCostos | None = None,
+) -> pd.DataFrame:
+    """
+    Igual que `run_monte_carlo()` (misma interfaz, mismas columnas de
+    salida), pero generando rendimiento y precio con reducción de varianza
+    por variables antitéticas (`simulate_yields_antitetico`,
+    `simulate_prices_antitetico`) en vez de muestreo directo.
 
-    return pd.DataFrame({
-        "simulacion":       np.repeat(np.arange(n), T),
-        "año":              np.tile(años, n),
-        "rendimiento_kg_ha": yields.ravel(),
-        "precio_usd_kg":    prices.ravel(),
-        "ingreso_usd":      revenue.ravel(),
-        "opex_usd":         np.tile(opex_por_año, n),
-        "flujo_neto_usd":   flujo_neto.ravel(),
-        "vp_neto_usd":      vp_neto.ravel(),
-        "van_neto_usd":     van_neto_acum.ravel(),
-    })
+    Para el mismo `n_simulaciones`, el valor esperado de cada columna debería
+    ser similar al de `run_monte_carlo()` — lo que cambia es la varianza del
+    estimador (la media), no el resultado esperado.
+    """
+    params, costos = _resolver_params_costos(params, costos)
+    rng = np.random.default_rng(params.semilla)
+
+    yields = simulate_yields_antitetico(params, rng)
+    prices = simulate_prices_antitetico(params, rng)
+
+    return _orquestar_resultado(yields, prices, params, costos)
 
 
 def _tir_vectorizada(
