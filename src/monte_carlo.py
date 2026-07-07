@@ -256,8 +256,10 @@ def run_monte_carlo(
         Configuración del modelo de rendimientos. Si es None usa los valores
         por defecto.
     costos : ParametrosCostos, opcional
-        Configuración de costos (CAPEX/OPEX). Si es None usa los valores
-        por defecto, calibrados a 25 ha (ver src/costos.py).
+        Configuración de costos (CAPEX/OPEX por hectárea, ver src/costos.py).
+        Si es None se crea con `hectareas=params.hectareas`. Si se pasa
+        explícito y su `.hectareas` no coincide con `params.hectareas`, se
+        sincroniza automáticamente (se pisa `costos.hectareas`).
 
     Retorna
     -------
@@ -268,7 +270,9 @@ def run_monte_carlo(
     if params is None:
         params = ParametrosMC()
     if costos is None:
-        costos = ParametrosCostos()
+        costos = ParametrosCostos(hectareas=params.hectareas)
+    elif costos.hectareas != params.hectareas:
+        costos.hectareas = params.hectareas
 
     rng = np.random.default_rng(params.semilla)
 
