@@ -7,15 +7,38 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from scipy import integrate
+from scipy.stats import norm
 
 from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
 
 # ---------------------------------------------------------------------------
-# Constantes del plan de negocios
+# Constantes del plan de negocios y calibración climática
 # ---------------------------------------------------------------------------
 
 HECTAREAS = 25.0
-RENDIMIENTO_PLENA_KG_HA = 3_000  # kg/ha en plena producción (año 12+) — techo validado
+
+# Rendimiento VALIDADO en plena producción (año 12+): dato real, tomado de
+# data/external/produccion_ingresos_plan.csv (el plan de negocio). Es el
+# rendimiento ESPERADO una vez aplicados frío, calor, vecería y
+# supervivencia en sus valores medios/calibrados — no un valor que se
+# observe todos los años (la propia curva de esa fuente rebota entre
+# ~2.400 y 3.000 kg/ha por vecería).
+RENDIMIENTO_VALIDADO_KG_HA = 3_000
+
+# Calibración climática y biológica real (Módulo 0, ERA5-Land / Open-Meteo,
+# Jocolí 1990-2024). Se usan tanto como defaults de ParametrosMC como para
+# derivar RENDIMIENTO_IDEAL_KG_HA más abajo — una sola fuente de verdad.
+_HORAS_FRIO_MEDIA = 984.3
+_HORAS_FRIO_STD = 212.7
+_CALOR_VERANO_MEDIA = 29.87
+_CALOR_VERANO_STD = 1.98
+_P_BAJO_SI_ALTO = 0.65   # P(año bajo | año previo fue alto), vecería
+_P_ALTO_SI_BAJO = 0.80   # P(año alto | año previo fue bajo), vecería
+_VECERIA_FACTOR_MIN = 0.60
+_VECERIA_FACTOR_MAX = 0.70
+_PLANTAS_ALPHA = 2.0     # falla de plantas ~ Beta(alpha, beta), media ~9%
+_PLANTAS_BETA = 20.0
 
 # Fracción del rendimiento pleno por año del proyecto (1–20)
 _CURVA_BASE: dict[int, float] = {
@@ -36,55 +59,10 @@ ESCENARIOS_PRECIO: dict[str, tuple[float, float, float]] = {
 
 
 # ---------------------------------------------------------------------------
-# Configuración del modelo
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ParametrosMC:
-    """Parámetros configurables del modelo de Monte Carlo."""
-
-    n_simulaciones: int = 10_000
-    n_años: int = 20
-    hectareas: float = HECTAREAS
-    rendimiento_plena: float = RENDIMIENTO_PLENA_KG_HA
-
-    # Horas de frío — calibrado desde PARAMS_CLIMA_JOCOLI (Módulo 0)
-    horas_frio_media: float = 984.3
-    horas_frio_std: float = 212.7
-
-    # Calor estival (tmax media diaria, enero-febrero) — calibrado con datos
-    # reales ERA5-Land / Open-Meteo 1990-2024 (Módulo 0, calcular_calor_verano)
-    calor_verano_media: float = 29.87
-    calor_verano_std: float = 1.98
-
-    # Precisión (kappa) del ruido Beta sobre los factores de frío/calor:
-    # valores altos acercan el factor muestreado a su media determinística,
-    # valores bajos agregan más variabilidad biológica no explicada por el
-    # clima (microclima, estado sanitario, timing de heladas). Punto de
-    # partida razonable, pendiente de calibrar con datos reales o inferencia
-    # bayesiana (ver notas/PLAN_TESIS.md, Paso 4).
-    precision_factor_frio: float = 15.0
-    precision_factor_calor: float = 15.0
-
-    # Vecería: cadena de Markov sobre estado alto/bajo
-    p_bajo_si_alto: float = 0.65   # P(año bajo | año previo fue alto)
-    p_alto_si_bajo: float = 0.80   # P(año alto | año previo fue bajo)
-    veceria_factor_min: float = 0.60  # multiplicador mínimo en año bajo
-    veceria_factor_max: float = 0.70  # multiplicador máximo en año bajo
-
-    # Tasa de falla de plantas — Beta(alpha, beta); media ~9%
-    plantas_alpha: float = 2.0
-    plantas_beta: float = 20.0
-
-    # Escenario de precio y tasa de descuento para VAN
-    escenario: Literal["pesimista", "base", "optimista"] = "base"
-    tasa_descuento: float = 0.08
-
-    semilla: int = 42
-
-
-# ---------------------------------------------------------------------------
-# Funciones internas
+# Funciones de transferencia climática
+#
+# Se definen antes de RENDIMIENTO_IDEAL_KG_HA porque ese valor se deriva
+# integrándolas contra la calibración climática de arriba.
 # ---------------------------------------------------------------------------
 
 def _media_factor_frio(horas: np.ndarray) -> np.ndarray:
@@ -98,9 +76,9 @@ def _media_factor_frio(horas: np.ndarray) -> np.ndarray:
     Jocolí 1990-2024), no el óptimo agronómico teórico de 1.000 hs. Si se
     centrara en el óptimo teórico, el clima típico del sitio (que está por
     debajo de ese óptimo) se penalizaría dos veces: una vez implícitamente,
-    porque el techo de 3.000 kg/ha en plena producción (RENDIMIENTO_PLENA_KG_HA)
-    ya está validado contra el clima real de Jocolí, y otra vez explícitamente,
-    acá, si el factor no llegara a 1.00 en un año climáticamente típico.
+    porque RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha) ya está validado contra
+    el clima real de Jocolí, y otra vez explícitamente, acá, si el factor no
+    llegara a 1.00 en un año climáticamente típico.
 
     Umbrales (mismo ancho de zona que la versión centrada en el óptimo teórico,
     solo desplazados a la media real):
@@ -108,8 +86,8 @@ def _media_factor_frio(horas: np.ndarray) -> np.ndarray:
     - 784.3–984.3 hs: penalidad lineal moderada (0.70–1.00)
     - < 784.3 hs  : año con déficit severo, penalidad fuerte (0.40–0.70)
     """
-    CENTRO = 984.3  # horas_frio_media histórica real (Módulo 0, Jocolí 1990-2024)
-    ANCHO = 200.0   # mismo ancho de zona moderada que la función original
+    CENTRO = _HORAS_FRIO_MEDIA
+    ANCHO = 200.0  # mismo ancho de zona moderada que la función original
     UMBRAL_SEVERO = CENTRO - ANCHO  # 784.3
     return np.clip(
         np.where(
@@ -137,8 +115,8 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
     Jocolí 1990-2024), no el rango óptimo agronómico teórico (35-38 °C,
     Crane y Takeda, 1979; Ferguson, 2006). Mismo razonamiento que en
     `_media_factor_frio`: centrar en el óptimo teórico penalizaría dos veces
-    el déficit de calor que ya está implícito en el techo de 3.000 kg/ha
-    validado para este sitio.
+    el déficit de calor que ya está implícito en RENDIMIENTO_VALIDADO_KG_HA
+    (3.000 kg/ha) para este sitio.
 
     No se premia con factor > 1.00 un año más cálido que la media: eso
     requeriría que el factor pudiera superar 1.0, lo cual es incompatible
@@ -152,8 +130,8 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
     - 22.57–29.87 °C: penalidad lineal moderada (0.70–1.00)
     - < 22.57 °C   : año con déficit severo, penalidad fuerte (0.40–0.70)
     """
-    CENTRO = 29.87  # calor_verano_media histórica real (Módulo 0, Jocolí 1990-2024)
-    ANCHO = 7.3     # mismo ancho de zona moderada que la función original (35 - 27.7)
+    CENTRO = _CALOR_VERANO_MEDIA
+    ANCHO = 7.3  # mismo ancho de zona moderada que la función original (35 - 27.7)
     UMBRAL_SEVERO = CENTRO - ANCHO  # 22.57
     return np.clip(
         np.where(
@@ -185,6 +163,110 @@ def _muestrear_beta_por_media(
     beta = (1 - media) * precision
     return rng.beta(alpha, beta)
 
+
+def _producto_esperado_factores() -> float:
+    """
+    Producto de los valores esperados de los cuatro factores estocásticos de
+    `simulate_yields()` (frío, calor, vecería, supervivencia), bajo la
+    calibración por defecto. Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
+    partir de RENDIMIENTO_VALIDADO_KG_HA — ver el docstring de esa constante.
+
+    Frío y calor: integración numérica de la función de transferencia
+    correspondiente contra la densidad Normal calibrada (el ruido Beta
+    posterior de `_muestrear_beta_por_media` no cambia la media, por
+    construcción: E[Beta(m*k, (1-m)*k)] = m — no hace falta simularlo acá).
+
+    Vecería: probabilidad estacionaria de la cadena de Markov de 2 estados
+    (fórmula cerrada: pi_bajo = p_bajo_si_alto / (p_bajo_si_alto + p_alto_si_bajo)).
+
+    Supervivencia: media de 1 - Beta(alpha, beta) = 1 - alpha / (alpha + beta).
+    """
+    e_frio = integrate.quad(
+        lambda h: float(_media_factor_frio(np.array([h]))[0])
+        * norm.pdf(h, _HORAS_FRIO_MEDIA, _HORAS_FRIO_STD),
+        _HORAS_FRIO_MEDIA - 6 * _HORAS_FRIO_STD,
+        _HORAS_FRIO_MEDIA + 6 * _HORAS_FRIO_STD,
+    )[0]
+
+    e_calor = integrate.quad(
+        lambda t: float(_media_factor_calor(np.array([t]))[0])
+        * norm.pdf(t, _CALOR_VERANO_MEDIA, _CALOR_VERANO_STD),
+        _CALOR_VERANO_MEDIA - 6 * _CALOR_VERANO_STD,
+        _CALOR_VERANO_MEDIA + 6 * _CALOR_VERANO_STD,
+    )[0]
+
+    pi_bajo = _P_BAJO_SI_ALTO / (_P_BAJO_SI_ALTO + _P_ALTO_SI_BAJO)
+    factor_bajo_medio = (_VECERIA_FACTOR_MIN + _VECERIA_FACTOR_MAX) / 2
+    e_veceria = pi_bajo * factor_bajo_medio + (1 - pi_bajo) * 1.0
+
+    e_supervivencia = 1.0 - _PLANTAS_ALPHA / (_PLANTAS_ALPHA + _PLANTAS_BETA)
+
+    return e_frio * e_calor * e_veceria * e_supervivencia
+
+
+# Rendimiento IDEAL: constante de NORMALIZACIÓN derivada, no una afirmación
+# agronómica directa. Es el valor que hay que poner como techo de la curva
+# de maduración (curva_base) para que, después de multiplicar por los cuatro
+# factores estocásticos (frío, calor, vecería, supervivencia) en sus valores
+# esperados, el rendimiento resultante converja al dato real y validado
+# RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha, ver esa constante más arriba).
+# RENDIMIENTO_IDEAL_KG_HA nunca se observa en la práctica: requeriría que
+# los cuatro factores dieran 1.0 simultáneamente, lo cual no ocurre (vecería
+# y supervivencia son estructuralmente siempre < 1).
+RENDIMIENTO_IDEAL_KG_HA = RENDIMIENTO_VALIDADO_KG_HA / _producto_esperado_factores()
+
+
+# ---------------------------------------------------------------------------
+# Configuración del modelo
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ParametrosMC:
+    """Parámetros configurables del modelo de Monte Carlo."""
+
+    n_simulaciones: int = 10_000
+    n_años: int = 20
+    hectareas: float = HECTAREAS
+    rendimiento_plena: float = RENDIMIENTO_IDEAL_KG_HA
+
+    # Horas de frío — calibrado desde PARAMS_CLIMA_JOCOLI (Módulo 0)
+    horas_frio_media: float = _HORAS_FRIO_MEDIA
+    horas_frio_std: float = _HORAS_FRIO_STD
+
+    # Calor estival (tmax media diaria, enero-febrero) — calibrado con datos
+    # reales ERA5-Land / Open-Meteo 1990-2024 (Módulo 0, calcular_calor_verano)
+    calor_verano_media: float = _CALOR_VERANO_MEDIA
+    calor_verano_std: float = _CALOR_VERANO_STD
+
+    # Precisión (kappa) del ruido Beta sobre los factores de frío/calor:
+    # valores altos acercan el factor muestreado a su media determinística,
+    # valores bajos agregan más variabilidad biológica no explicada por el
+    # clima (microclima, estado sanitario, timing de heladas). Punto de
+    # partida razonable, pendiente de calibrar con datos reales o inferencia
+    # bayesiana (ver notas/PLAN_TESIS.md, Paso 4).
+    precision_factor_frio: float = 15.0
+    precision_factor_calor: float = 15.0
+
+    # Vecería: cadena de Markov sobre estado alto/bajo
+    p_bajo_si_alto: float = _P_BAJO_SI_ALTO
+    p_alto_si_bajo: float = _P_ALTO_SI_BAJO
+    veceria_factor_min: float = _VECERIA_FACTOR_MIN
+    veceria_factor_max: float = _VECERIA_FACTOR_MAX
+
+    # Tasa de falla de plantas — Beta(alpha, beta); media ~9%
+    plantas_alpha: float = _PLANTAS_ALPHA
+    plantas_beta: float = _PLANTAS_BETA
+
+    # Escenario de precio y tasa de descuento para VAN
+    escenario: Literal["pesimista", "base", "optimista"] = "base"
+    tasa_descuento: float = 0.08
+
+    semilla: int = 42
+
+
+# ---------------------------------------------------------------------------
+# Funciones internas restantes
+# ---------------------------------------------------------------------------
 
 def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
