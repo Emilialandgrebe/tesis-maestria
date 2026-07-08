@@ -34,31 +34,37 @@ Universidad Austral · Maestría en Ciencia de Datos
 
 ---
 
-## Problemas que hay que resolver antes de la defensa
+## Resuelto
 
-### El VAN es solo de ingresos brutos, no es un modelo de negocio
+### El VAN era solo de ingresos brutos, no un modelo de negocio
 
-Esto es lo más urgente. Ahora el modelo calcula ingresos x precio x hectáreas y lo descuenta. No hay costos. Un jurado con formación financiera lo detecta de inmediato.
+Resuelto el 2026-07-04. `src/costos.py` tiene `ParametrosCostos` (CAPEX/OPEX
+calibrados por hectárea contra el plan de negocio real, ver `data/external/`).
+`run_monte_carlo()` en `src/monte_carlo.py` calcula el flujo de caja neto
+(ingresos - OPEX - CAPEX inicial) en vez de ingresos brutos, y `resumen_financiero()`
+devuelve VAN neto, TIR y año de recupero por simulación.
 
-Lo que falta modelar:
-- Inversión inicial en año 0 (plantines, sistema de riego, preparación del suelo) — alrededor de USD 18.000/ha
-- Costos fijos anuales (mano de obra, mantenimiento, seguros) — alrededor de USD 1.500/ha/año
-- Costos variables desde el año 6 en adelante (cosecha, procesamiento, insumos) — alrededor de USD 800/ha/año
+### No había análisis de sensibilidad
 
-Con eso se puede calcular VAN neto, TIR y período de recupero. Sin esto el número que sale no significa nada.
+Resuelto el 2026-07-07. `src/sensibilidad.py` corre índices de Sobol (S1 y ST)
+con SALib directamente sobre el simulador real (`run_monte_carlo_antitetico`
++ `resumen_financiero`), por separado para cada escenario de precio (el
+parámetro `escenario` es categórico, Sobol necesita variables continuas).
+Notebook: `notebooks/03_sensibilidad_sobol.ipynb`. Hallazgo principal:
+`tasa_descuento` domina la varianza del VAN en los tres escenarios; el
+segundo lugar (`capex_extra_pct` vs. `hectareas`) depende del escenario de
+precio.
 
-### No hay análisis de sensibilidad
+### No había reducción de varianza
 
-No se sabe qué variable mueve más el VAN. ¿Es el precio? ¿Las horas de frío? ¿La vecería? Eso hay que demostrarlo, no suponerlo.
+Resuelto el 2026-07-07. `run_monte_carlo_antitetico()` en `src/monte_carlo.py`
+genera cada fuente de variabilidad (vecería, horas de frío, calor,
+supervivencia, precio) transformando uniformes antitéticos vía la PPF de la
+distribución correspondiente. Verificado: 69,3% de reducción de varianza del
+estimador (no de la varianza "pooled" de las muestras, que no es la métrica
+correcta — ver la nota metodológica en `notebooks/01_monte_carlo.ipynb`).
 
-Lo que falta:
-- Tornado chart: varía cada parámetro uno a la vez mientras los demás están fijos
-- Índices de Sobol S1 y ST: mide qué fracción de la varianza total del VAN explica cada variable, incluyendo interacciones
-- Librería a usar: SALib
-
-### No hay reducción de varianza
-
-El programa de la materia lo pide explícitamente. La técnica es variables antitéticas: en lugar de generar U ~ Uniforme(0,1), se generan pares (U, 1-U). El estimador resultante tiene menos varianza con el mismo número de simulaciones. Hay que implementarlo y comparar la varianza con y sin la técnica.
+## Problemas abiertos
 
 ### Los parámetros clave no tienen soporte bibliográfico
 
@@ -69,11 +75,21 @@ Algunos números que están en el código son supuestos que hay que citar o just
 - El umbral de 800 hs como crítico y 1.000 hs como óptimo — Goldhammer (1995)
 - La inversión inicial de USD 18.000/ha — necesita cotización real o fuente de INTA / plan de negocios
 
+### Inferencia bayesiana pendiente
+
+Ver Paso 4 más abajo — reemplazar los supuestos ad hoc de frío/vecería por estimaciones con MCMC (PyMC).
+
+### Dataset sintético para ML pendiente
+
+Barrer el espacio de parámetros con `simulate_yields()` para generar un dataset sintético de entrenamiento (capa 3 de la arquitectura de datos del proyecto). Todavía no existe ningún archivo para esto en el repo.
+
 ---
 
 ## Plan de implementación
 
 ### Paso 1 — módulo de costos (empezar por acá)
+
+**Estado: completado (2026-07-04).**
 
 Crear `src/costos.py` con una dataclass `ParametrosCostos` y actualizar `src/monte_carlo.py` para que el VAN se calcule sobre el flujo de caja neto, no sobre los ingresos brutos.
 
@@ -86,9 +102,17 @@ El resultado esperado es tener `van_neto_usd` en lugar de `van_acumulado_usd`, m
 
 ### Paso 2 — variables antitéticas
 
+**Estado: completado (2026-07-07).**
+
 En `src/monte_carlo.py` agregar una función `run_monte_carlo_antitetico()`. La idea es simple: generar la mitad de las simulaciones con U y la otra mitad con 1-U, apilarlas y comparar la varianza del estimador resultante contra el Monte Carlo estándar con el mismo N.
 
 ### Paso 3 — análisis de sensibilidad
+
+**Estado: completado (2026-07-07).** El notebook terminó llamándose
+`notebooks/03_sensibilidad_sobol.ipynb` (no `02_sensibilidad.ipynb` como decía
+originalmente acá) y por ahora solo tiene los índices de Sobol, sin tornado
+chart local de un parámetro a la vez — el tornado chart que sí se hizo es de
+los índices ST de Sobol ordenados, que cumple el mismo propósito visual.
 
 Nuevo notebook `notebooks/02_sensibilidad.ipynb`:
 - primero el tornado chart (análisis local, un parámetro a la vez)
@@ -158,8 +182,9 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 ## Librerías que hay que agregar a requirements.txt
 
 - pymc >= 5.0 — inferencia Bayesiana
-- SALib >= 1.4 — análisis de sensibilidad Sobol
 - arviz >= 0.17 — visualización de distribuciones posterior
+
+SALib ya está agregado (`SALib==1.4.8`, fijado a esa versión porque 1.5.x exige `numpy>=2.0`).
 
 ---
 
@@ -172,4 +197,4 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 
 ---
 
-Última actualización: junio 2026
+Última actualización: 2026-07-08
