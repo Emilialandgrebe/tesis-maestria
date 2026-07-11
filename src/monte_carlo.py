@@ -13,6 +13,7 @@ from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
 from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
+from src.precio_estocastico import ParametrosPrecioAR1, simulate_prices_ar1_antitetico
 
 # ---------------------------------------------------------------------------
 # Constantes del plan de negocios y calibración climática
@@ -621,6 +622,39 @@ def run_monte_carlo_antitetico(
 
     yields = simulate_yields_antitetico(params, rng)
     prices = simulate_prices_antitetico(params, rng)
+
+    return _orquestar_resultado(yields, prices, params, costos)
+
+
+def run_monte_carlo_precio_historico(
+    params: ParametrosMC | None = None,
+    costos: ParametrosCostos | None = None,
+    precio_params: ParametrosPrecioAR1 | None = None,
+) -> pd.DataFrame:
+    """
+    Igual que `run_monte_carlo_antitetico()` (misma interfaz, mismas columnas
+    de salida), pero generando el precio con `simulate_prices_ar1_antitetico()`
+    (`src/precio_estocastico.py`, AR(1) sobre retornos log calibrado con datos
+    reales de FRED) en vez de `simulate_prices_antitetico()` (triangular
+    independiente por año). `simulate_prices()`/`ESCENARIOS_PRECIO` quedan
+    intactos como referencia/comparación para la tesis.
+
+    Si `precio_params` es None, se arma con
+    `ParametrosPrecioAR1(escenario=params.escenario)` — así el `escenario` de
+    `ParametrosMC` sigue siendo la única fuente de verdad de qué escenario
+    correr, sin pasar dos objetos con el mismo campo potencialmente
+    desincronizados.
+    """
+    params, costos = _resolver_params_costos(params, costos)
+    rng = np.random.default_rng(params.semilla)
+
+    if precio_params is None:
+        precio_params = ParametrosPrecioAR1(escenario=params.escenario)
+
+    yields = simulate_yields_antitetico(params, rng)
+    prices = simulate_prices_ar1_antitetico(
+        params.n_simulaciones, params.n_años, precio_params, rng
+    )
 
     return _orquestar_resultado(yields, prices, params, costos)
 
