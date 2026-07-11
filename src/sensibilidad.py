@@ -43,13 +43,28 @@ PROBLEMA_SOBOL: dict = {
 }
 
 
-def _evaluar_van_medio(
-    fila: np.ndarray, escenario: str, n_simulaciones: int, semilla: int
+_METRICAS_VALIDAS = ("van_neto_medio_usd", "prob_van_negativo")
+
+
+def _evaluar_metrica(
+    fila: np.ndarray,
+    escenario: str,
+    n_simulaciones: int,
+    semilla: int,
+    metrica: str = "van_neto_medio_usd",
 ) -> float:
     """
     Corre una simulación completa con los 6 parámetros de `fila` (mismo
-    orden que PROBLEMA_SOBOL["names"]) y devuelve el VAN neto medio: el
-    output escalar que analiza Sobol.
+    orden que PROBLEMA_SOBOL["names"]) y devuelve el output escalar que
+    analiza Sobol.
+
+    `metrica` controla qué estadístico de `resumen_financiero()` se devuelve:
+    - "van_neto_medio_usd" (default): resumen["van_neto_usd"].mean() — el
+      VAN esperado del proyecto. Es el output histórico, para no romper el
+      análisis ya guardado en data/processed/sobol_indices.parquet.
+    - "prob_van_negativo": (resumen["van_neto_usd"] < 0).mean() — fracción
+      de simulaciones con VAN negativo, una pregunta de RIESGO distinta de
+      "cuánto VAN se espera en promedio".
 
     `capex_extra_pct` no es un campo de ParametrosCostos (no se modifica
     src/costos.py): se aplica acá como un recargo sobre `capex_inicial_ha`,
@@ -63,6 +78,9 @@ def _evaluar_van_medio(
     ruido de Monte Carlo (más notorio con `n_simulaciones` chico) se
     mezclaría con la sensibilidad real de cada parámetro.
     """
+    if metrica not in _METRICAS_VALIDAS:
+        raise ValueError(f"metrica debe ser una de {_METRICAS_VALIDAS}, recibido {metrica!r}")
+
     (
         tasa_descuento,
         precision_factor_frio,
@@ -87,7 +105,10 @@ def _evaluar_van_medio(
 
     df = run_monte_carlo_antitetico(params, costos)
     resumen = resumen_financiero(df, costos)
-    return float(resumen["van_neto_usd"].mean())
+
+    if metrica == "van_neto_medio_usd":
+        return float(resumen["van_neto_usd"].mean())
+    return float((resumen["van_neto_usd"] < 0).mean())
 
 
 def analizar_sensibilidad_sobol(
@@ -95,6 +116,7 @@ def analizar_sensibilidad_sobol(
     n_base: int = 128,
     n_simulaciones: int = 1_000,
     semilla: int = 42,
+    metrica: str = "van_neto_medio_usd",
 ) -> pd.DataFrame:
     """
     Análisis de sensibilidad global de Sobol sobre el simulador real
@@ -117,7 +139,7 @@ def analizar_sensibilidad_sobol(
         Tamaño base de la muestra de Sobol (N). Total de evaluaciones del
         modelo = n_base * (6 + 2) = n_base * 8. Calibrado empíricamente:
         cada evaluación con n_simulaciones=1.000 tarda ~0.2s, así que
-        n_base=128 (1.024 evaluaciones/escenario) da ~11-13 minutos en
+        n_base=128 (1.024 evaluaciones/escenario) da ~11-17 minutos en
         total para los 3 escenarios (medido en corridas reales); n_base=256
         ya sube a ~21 minutos.
     n_simulaciones : int
@@ -125,10 +147,15 @@ def analizar_sensibilidad_sobol(
         evaluación de Sobol (deliberadamente más chico que el N de
         producción, para que el total de evaluaciones sea manejable).
     semilla : int
-        Semilla FIJA para todas las evaluaciones (ver `_evaluar_van_medio`) y
-        para el muestreador de Sobol (`sobol_sample.sample(..., seed=semilla)`).
-        Sin esto último, cada corrida usa una secuencia de Sobol distinta y
-        los índices S1/ST no son reproducibles de una corrida a otra.
+        Semilla FIJA para todas las evaluaciones (ver `_evaluar_metrica`) y
+        para el muestreador de Sobol (`sobol_sample.sample(..., seed=semilla)`)
+        y para el bootstrap de `sobol_analyze.analyze`. Sin esto, cada
+        corrida usa una secuencia de Sobol distinta y S1/ST y sus bandas de
+        confianza no son reproducibles de una corrida a otra.
+    metrica : str
+        Qué estadístico de `resumen_financiero()` analiza Sobol — ver
+        `_evaluar_metrica`. Default "van_neto_medio_usd" para no romper el
+        análisis ya guardado en data/processed/sobol_indices.parquet.
 
     Retorna
     -------
@@ -138,16 +165,16 @@ def analizar_sensibilidad_sobol(
         PROBLEMA_SOBOL, n_base, calc_second_order=False, seed=semilla
     )
     total = muestra.shape[0]
-    print(f"[{escenario}] {total} evaluaciones del modelo (N={n_base} x 8)...")
+    print(f"[{escenario}/{metrica}] {total} evaluaciones del modelo (N={n_base} x 8)...")
 
     outputs = np.empty(total)
     inicio = time.time()
     paso_reporte = max(1, total // 10)
     for i, fila in enumerate(muestra):
-        outputs[i] = _evaluar_van_medio(fila, escenario, n_simulaciones, semilla)
+        outputs[i] = _evaluar_metrica(fila, escenario, n_simulaciones, semilla, metrica)
         if (i + 1) % paso_reporte == 0 or (i + 1) == total:
             transcurrido = time.time() - inicio
-            print(f"[{escenario}] {i + 1}/{total} ({transcurrido:.0f}s transcurridos)")
+            print(f"[{escenario}/{metrica}] {i + 1}/{total} ({transcurrido:.0f}s transcurridos)")
 
     indices = sobol_analyze.analyze(
         PROBLEMA_SOBOL,
@@ -167,24 +194,67 @@ def analizar_sensibilidad_sobol(
 
 
 def comparar_sensibilidad_escenarios(
-    n_base: int = 128, n_simulaciones: int = 1_000, semilla: int = 42
+    n_base: int = 128,
+    n_simulaciones: int = 1_000,
+    semilla: int = 42,
+    metrica: str = "van_neto_medio_usd",
+    ruta_salida: Path | str | None = None,
 ) -> pd.DataFrame:
     """
     Corre `analizar_sensibilidad_sobol()` para los 3 escenarios de precio y
     devuelve un único DataFrame combinado (columna `escenario` adicional).
-    Guarda el resultado en data/processed/sobol_indices.parquet.
+
+    Guarda el resultado en `ruta_salida`, o en
+    data/processed/sobol_indices.parquet si no se especifica (comportamiento
+    histórico, default `metrica="van_neto_medio_usd"`). Ver
+    `comparar_sensibilidad_riesgo()` para el análisis con `metrica="prob_van_negativo"`,
+    que guarda en un archivo separado para no pisar este.
     """
     resultados = []
     for escenario in ["pesimista", "base", "optimista"]:
-        df_escenario = analizar_sensibilidad_sobol(escenario, n_base, n_simulaciones, semilla)
+        df_escenario = analizar_sensibilidad_sobol(
+            escenario, n_base, n_simulaciones, semilla, metrica
+        )
         df_escenario["escenario"] = escenario
         resultados.append(df_escenario)
 
     combinado = pd.concat(resultados, ignore_index=True)
 
-    ruta = Path(__file__).resolve().parents[1] / "data" / "processed" / "sobol_indices.parquet"
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    combinado.to_parquet(ruta)
-    print(f"Guardado en {ruta}")
+    if ruta_salida is None:
+        ruta_salida = Path(__file__).resolve().parents[1] / "data" / "processed" / "sobol_indices.parquet"
+    else:
+        ruta_salida = Path(ruta_salida)
+    ruta_salida.parent.mkdir(parents=True, exist_ok=True)
+    combinado.to_parquet(ruta_salida)
+    print(f"Guardado en {ruta_salida}")
 
     return combinado
+
+
+def comparar_sensibilidad_riesgo(
+    n_base: int = 128, n_simulaciones: int = 1_000, semilla: int = 42
+) -> pd.DataFrame:
+    """
+    Igual que `comparar_sensibilidad_escenarios()`, pero con
+    `metrica="prob_van_negativo"` en vez del VAN medio: mide qué variable
+    explica más la varianza de la PROBABILIDAD de que el proyecto termine
+    con VAN negativo, en vez de la varianza del VAN esperado.
+
+    Motivación: `precision_factor_frio`/`precision_factor_calor` dan
+    S1≈ST≈0 en el análisis de VAN medio, porque la precisión de una Beta
+    controla su varianza, no su media — no puede mover el promedio del VAN
+    por construcción. Pero sí debería importar para el riesgo (con qué
+    frecuencia un año malo de frío/calor arrastra el proyecto a VAN
+    negativo), una pregunta de negocio distinta.
+
+    Guarda en data/processed/sobol_indices_riesgo.parquet (archivo separado
+    del análisis de VAN medio, para no pisarlo).
+    """
+    ruta = Path(__file__).resolve().parents[1] / "data" / "processed" / "sobol_indices_riesgo.parquet"
+    return comparar_sensibilidad_escenarios(
+        n_base=n_base,
+        n_simulaciones=n_simulaciones,
+        semilla=semilla,
+        metrica="prob_van_negativo",
+        ruta_salida=ruta,
+    )
