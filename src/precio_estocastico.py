@@ -5,9 +5,13 @@ sin memoria) por un proceso calibrado con datos reales del precio (FRED, serie
 WPU01190106). El AR(1) es sobre los RETORNOS logarítmicos, no sobre el nivel de
 precio: el ADF sobre el nivel no rechaza raíz unitaria (p=0.726), así que no hay
 sustento para modelar reversión a un nivel de precio de largo plazo (un
-Ornstein-Uhlenbeck sobre log(precio) no estaría respaldado por los datos). Ver
-`notebooks/04_calibracion_precio.ipynb` para el diagnóstico completo y
-`notas/plan_precio_historico.md` para la justificación epistemológica.
+Ornstein-Uhlenbeck sobre log(precio) no estaría respaldado por los datos). En
+la nomenclatura estándar de series de tiempo, esto es un ARIMA(1,1,0) con
+drift: el nivel de precio es I(1) (no estacionario), la diferenciación de
+orden 1 (retornos logarítmicos) lo estacionariza, y el AR(1) se ajusta sobre
+esa serie ya diferenciada. Ver `notebooks/04_calibracion_precio.ipynb` para
+el diagnóstico completo y `notas/plan_precio_historico.md` para la
+justificación epistemológica.
 
 Integrado a `src/monte_carlo.py` vía `run_monte_carlo_precio_historico()`.
 """
