@@ -64,6 +64,44 @@ distribución correspondiente. Verificado: 69,3% de reducción de varianza del
 estimador (no de la varianza "pooled" de las muestras, que no es la métrica
 correcta — ver la nota metodológica en `notebooks/01_monte_carlo.ipynb`).
 
+### El precio se simulaba triangular e independiente por año, sin memoria
+
+Resuelto el 2026-07-11/12. `simulate_prices()` asumía un sorteo independiente
+por año (sin autocorrelación), lo que descarta cualquier persistencia real
+del precio de un commodity angosto como el pistacho. Se calibró un AR(1)
+sobre los retornos logarítmicos (no sobre el nivel de precio) con datos reales
+de FRED (serie `WPU01190106`, PPI mensual, BLS, 1991-2026):
+
+- `src/data/price_fetcher.py` — descarga y cachea el índice mensual (`data/raw/precio_pistacho_fred.parquet`).
+- `src/data/price_features.py` — serie anual, retornos log y diagnóstico de autocorrelación.
+- `notebooks/04_calibracion_precio.ipynb` — diagnóstico documentado, citable en la tesis.
+- `src/precio_estocastico.py` — generador `simulate_prices_ar1()` / `simulate_prices_ar1_antitetico()`.
+- `run_monte_carlo_precio_historico()` en `src/monte_carlo.py` — integra el AR(1) al simulador real (`simulate_prices()`/`ESCENARIOS_PRECIO` quedan intactos como referencia/comparación).
+- `src/dataset_ml.py` — barre la incertidumbre del drift (`precio_drift_anual`) como parámetro de entrada del dataset ML.
+
+Calibración (serie completa 1991-2026, n_obs=35 retornos anuales): ADF sobre
+el nivel no rechaza raíz unitaria (estadístico=-1,0715, p=0,726) — no hay
+sustento para modelar reversión a un nivel de precio de largo plazo (se
+descartó un Ornstein-Uhlenbeck sobre log(precio)). El AR(1) sobre retornos da
+`phi=-0,265423` (p=0,131, no significativo al 5% pero económicamente
+relevante por el efecto de composición a 20 años) y `sigma_eps=0,137358`. El
+drift (`c`) se dejó en `0,008` (no la estimación puntual de la serie completa,
+`0,031127`): el IC95% del drift es amplio (aprox. [-2%, +7%]), así que se usó
+una calibración más conservadora sobre la ventana reciente 2010-2026 en vez de
+reclamar la precisión que la estimación puntual no tiene.
+
+Se había descartado antes un GBM puro (retornos i.i.d.): el ADF tampoco lo
+rechaza, pero componer 20 años de volatilidad sin corrección da colas
+económicamente implausibles (P90 del precio año 20 ≈ USD 53/kg en el
+escenario optimista). El AR(1) achica esa cola a ≈USD 28/kg con el drift
+conservador, manteniendo el ancla por escenario (`pesimista=7.0`,
+`base=9.5`, `optimista=13.0` USD/kg — misma moda que `ESCENARIOS_PRECIO`).
+
+Validado además que `P(VAN<0)` sube de 0,64% (precio triangular) a ~17% con
+el AR(1): no es una regresión, es la corrección de un sesgo del modelo viejo,
+que trataba el riesgo de precio como idiosincrático (se diluye en 15 años de
+producción) cuando en realidad es sistemático/persistente.
+
 ## Problemas abiertos
 
 ### Los parámetros clave no tienen soporte bibliográfico
@@ -154,6 +192,7 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 - Capítulo 3: modelo de simulación probabilística (Módulo 1, extender)
   - estructura del Monte Carlo
   - variables estocásticas y distribuciones
+  - modelo de precio con memoria: AR(1) sobre retornos log, datos y fuente FRED (serie `WPU01190106`, PPI mensual, BLS)
   - reducción de varianza con variables antitéticas
   - módulo de costos y VAN neto
   - análisis de sensibilidad con índices de Sobol
@@ -197,4 +236,4 @@ SALib ya está agregado (`SALib==1.4.8`, fijado a esa versión porque 1.5.x exig
 
 ---
 
-Última actualización: 2026-07-08
+Última actualización: 2026-07-12
