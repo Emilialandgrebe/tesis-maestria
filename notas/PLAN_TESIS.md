@@ -233,6 +233,18 @@ SALib ya está agregado (`SALib==1.4.8`, fijado a esa versión porque 1.5.x exig
 - Citar todas las referencias bibliográficas de los parámetros antes de la defensa (ver sección de problemas)
 - Aclarar en el texto de la tesis que el VAN no incluye impuestos ni financiamiento
 - La curva de producción por año (del 1 al 20) también necesita una referencia o aclarar que es un supuesto del modelo
+- CAPEX parcialmente cotizado: de 30 ítems en data/external/capex.csv, 16
+  tienen fuente real (columna costeado=SI, suman ~USD 1.129.013) y 14 siguen
+  sin cotizar (costeado=NO). Los ítems faltantes se completan con estimaciones
+  web de distinta confianza en data/external/capex_estimaciones_web.csv
+  (algunas "media", otras "baja"/"muy baja", una directamente "sin_dato" -- la
+  represa/cisterna). Los VAN citados en este documento y en el repo son
+  PROVISORIOS hasta cerrar la cotización completa. `capex_extra_pct` (barrido
+  en Sobol y en el dataset ML) existe justamente para representar esta
+  incertidumbre, pero no reemplaza tener el dato real. Antes de escribir
+  números finales en el documento de tesis (no solo en el repo), correr de
+  nuevo el pipeline completo (dataset_ml.py + entrenar_modelo.py) con el CAPEX
+  cerrado.
 
 ---
 
