@@ -9,7 +9,7 @@ Ornstein-Uhlenbeck sobre log(precio) no estaría respaldado por los datos). Ver
 `notebooks/04_calibracion_precio.ipynb` para el diagnóstico completo y
 `notas/plan_precio_historico.md` para la justificación epistemológica.
 
-Standalone por ahora — no se integra a `src/monte_carlo.py` hasta el Paso 5.
+Integrado a `src/monte_carlo.py` vía `run_monte_carlo_precio_historico()`.
 """
 
 from __future__ import annotations
