@@ -26,7 +26,9 @@ rendimientos con 5 fuentes de variabilidad, recalibrada contra el rendimiento
 validado real (rendimiento medio ~2.990 kg/ha en plena producción, calibrado
 contra el dato validado en `data/external/produccion_ingresos_plan.csv`, ver
 `RENDIMIENTO_VALIDADO_KG_HA`/`RENDIMIENTO_IDEAL_KG_HA` en `src/monte_carlo.py`);
-estructura de costos (CAPEX/OPEX) calibrada con el plan de negocio real; VAN
+estructura de costos (CAPEX/OPEX) calibrada con el plan de negocio real, con
+CAPEX (riego, pozo de agua) y OPEX estocásticos dentro de cada iteración del
+Monte Carlo (antes eran 100% determinísticos), a 50 ha por defecto; VAN
 neto, TIR y año de recupero; reducción de varianza por variables antitéticas
 (`run_monte_carlo_antitetico()`, ~69% de reducción de varianza del estimador
 verificada); análisis de sensibilidad global de Sobol sobre el simulador real

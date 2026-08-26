@@ -19,7 +19,7 @@ from src.precio_estocastico import ParametrosPrecioAR1, simulate_prices_ar1_anti
 # Constantes del plan de negocios y calibración climática
 # ---------------------------------------------------------------------------
 
-HECTAREAS = 25.0
+HECTAREAS = 50.0
 
 # Rendimiento VALIDADO en plena producción (año 12+): dato real, tomado de
 # data/external/produccion_ingresos_plan.csv (el plan de negocio). Es el
@@ -278,6 +278,15 @@ class ParametrosMC:
     escenario: Literal["pesimista", "base", "optimista"] = "base"
     tasa_descuento: float = 0.08
 
+    # Activa la variabilidad estocástica de CAPEX/OPEX (riego, pozo,
+    # multiplicador de OPEX -- ver simulate_capex_extra()/
+    # simulate_opex_multiplicador() más abajo). En False, capex_extra=0 y
+    # opex_multiplicador=1.0 para las 10.000 iteraciones (equivalente al
+    # comportamiento previo a esa fuente de variabilidad), sin invocar
+    # rng.triangular -- para comparar contra el modelo determinístico sin
+    # recurrir a anchos "casi cero" que rng.triangular no acepta.
+    capex_opex_estocastico: bool = True
+
     semilla: int = 42
 
 
@@ -512,6 +521,187 @@ def simulate_revenue(
     return yields_kg_ha * prices_usd_kg * hectareas
 
 
+# ---------------------------------------------------------------------------
+# CAPEX/OPEX estocásticos dentro de la simulación (PLAN_TESIS.md, 2026-08-26)
+#
+# Hasta acá, `src/costos.py` era 100% determinístico dentro de una corrida de
+# Monte Carlo: el único lugar donde CAPEX/OPEX variaban era el barrido LHS de
+# `dataset_ml.py` (`capex_extra_pct`), como parámetro FIJO por punto del
+# diseño, no como ruido dentro de las 10.000 iteraciones que arman la
+# distribución del VAN. Estas cuatro funciones agregan esa fuente de
+# variabilidad, con el mismo criterio de "no asumir distribuciones sin mirar
+# los datos" que ya usa el resto del módulo: ver los docstrings de las
+# constantes CAPEX_RIEGO_*/CAPEX_POZO_*/OPEX_VARIACION_PCT en src/costos.py
+# para la justificación de cada rango (o la falta de uno).
+# ---------------------------------------------------------------------------
+
+def _triangular_o_constante(
+    rng: np.random.Generator, low: float, mode: float, high: float, size: int
+) -> np.ndarray:
+    """
+    `rng.triangular(low, mode, high, size)`, o un array constante en `mode`
+    si el ancho es (numéricamente) cero -- `rng.triangular` levanta
+    `ValueError: left == right` en ese caso en vez de tratarlo como el caso
+    límite determinístico que en realidad es.
+    """
+    if np.isclose(low, high):
+        return np.full(size, mode)
+    return rng.triangular(low, mode, high, size)
+
+
+def _triangular_ppf_o_constante(
+    u: np.ndarray, low: float, mode: float, high: float
+) -> np.ndarray:
+    """
+    Igual que `_triangular_o_constante`, pero para la variante antitética
+    (PPF de `scipy.stats.triang` en vez de `rng.triangular`): si el ancho es
+    cero, `(mode - low) / (high - low)` sería una división por cero.
+    """
+    if np.isclose(low, high):
+        return np.full(u.shape, mode)
+    c = (mode - low) / (high - low)
+    return triang_dist.ppf(u, c, loc=low, scale=high - low)
+
+
+def simulate_capex_extra(
+    n_simulaciones: int,
+    costos: ParametrosCostos,
+    rng: np.random.Generator,
+    estocastico: bool = True,
+) -> np.ndarray:
+    """
+    CAPEX estocástico adicional (riego + pozo de agua), en USD, YA escalado
+    por `costos.hectareas`. Se suma a `costos.capex_inicial` (el componente
+    FIJO, ítems con cotización real) para obtener el CAPEX total de cada
+    simulación -- ver `_orquestar_resultado()`.
+
+    Un solo draw por simulación (no por año: el CAPEX ocurre una vez, al
+    inicio del proyecto). Riego y pozo se muestrean como dos triangulares
+    INDEPENDIENTES y se suman ítem por ítem, en vez de aproximar la suma con
+    una triangular equivalente por momentos: es más simple de mantener (dos
+    `rng.triangular()` en vez de resolver los momentos de una suma de
+    triangulares) y no introduce el error de encajar esa suma en una forma
+    triangular que no le corresponde exactamente. Se asume independencia
+    entre riego y pozo a falta de datos que sugieran correlación.
+
+    Parámetros
+    ----------
+    estocastico : bool
+        Si es False (`ParametrosMC.capex_opex_estocastico=False`), devuelve
+        directamente ceros para las `n_simulaciones` iteraciones, sin llamar
+        a `rng.triangular` -- para comparar contra el modelo determinístico
+        sin depender de un ancho "casi cero".
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones,), en USD.
+    """
+    if not estocastico:
+        return np.zeros(n_simulaciones)
+
+    riego_ha = _triangular_o_constante(
+        rng, costos.capex_riego_low_ha, costos.capex_riego_mode_ha,
+        costos.capex_riego_high_ha, n_simulaciones,
+    )
+    pozo_ha = _triangular_o_constante(
+        rng, costos.capex_pozo_low_ha, costos.capex_pozo_mode_ha,
+        costos.capex_pozo_high_ha, n_simulaciones,
+    )
+    return (riego_ha + pozo_ha) * costos.hectareas
+
+
+def simulate_capex_extra_antitetico(
+    n_simulaciones: int,
+    costos: ParametrosCostos,
+    rng: np.random.Generator,
+    estocastico: bool = True,
+) -> np.ndarray:
+    """
+    Versión de `simulate_capex_extra()` con reducción de varianza por
+    variables antitéticas: cada triangular (riego, pozo) se arma
+    transformando uniformes antitéticos (`_generar_uniformes_antiteticos`)
+    vía la PPF de `scipy.stats.triang`, mismo patrón que
+    `simulate_prices_antitetico()`. Ver `simulate_capex_extra()` para el
+    significado de `estocastico`.
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones,), en USD.
+    """
+    if not estocastico:
+        return np.zeros(n_simulaciones)
+
+    u_riego = _generar_uniformes_antiteticos(n_simulaciones, (1,), rng).ravel()
+    riego_ha = _triangular_ppf_o_constante(
+        u_riego, costos.capex_riego_low_ha, costos.capex_riego_mode_ha,
+        costos.capex_riego_high_ha,
+    )
+
+    u_pozo = _generar_uniformes_antiteticos(n_simulaciones, (1,), rng).ravel()
+    pozo_ha = _triangular_ppf_o_constante(
+        u_pozo, costos.capex_pozo_low_ha, costos.capex_pozo_mode_ha,
+        costos.capex_pozo_high_ha,
+    )
+
+    return (riego_ha + pozo_ha) * costos.hectareas
+
+
+def simulate_opex_multiplicador(
+    n_simulaciones: int,
+    costos: ParametrosCostos,
+    rng: np.random.Generator,
+    estocastico: bool = True,
+) -> np.ndarray:
+    """
+    Multiplicador estocástico de OPEX: triangular simétrica centrada en 1.0,
+    de ancho ±`costos.opex_variacion_pct` (ver esa constante en
+    src/costos.py para la justificación del valor). UN solo draw por
+    simulación, aplicado a todos los años de esa simulación en
+    `flujo_caja_neto()` -- representa "este proyecto en particular resultó
+    más/menos caro de lo presupuestado", no ruido año a año.
+
+    Parámetros
+    ----------
+    estocastico : bool
+        Si es False, devuelve directamente 1.0 (sin efecto) para las
+        `n_simulaciones` iteraciones, sin llamar a `rng.triangular`.
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones,).
+    """
+    if not estocastico:
+        return np.ones(n_simulaciones)
+
+    d = costos.opex_variacion_pct
+    return _triangular_o_constante(rng, 1.0 - d, 1.0, 1.0 + d, n_simulaciones)
+
+
+def simulate_opex_multiplicador_antitetico(
+    n_simulaciones: int,
+    costos: ParametrosCostos,
+    rng: np.random.Generator,
+    estocastico: bool = True,
+) -> np.ndarray:
+    """
+    Versión de `simulate_opex_multiplicador()` con reducción de varianza por
+    variables antitéticas. Al ser una triangular SIMÉTRICA (mode = punto
+    medio de [low, high]), el parámetro de forma de `scipy.stats.triang` es
+    siempre c=0.5, sin depender de `opex_variacion_pct`. Ver
+    `simulate_opex_multiplicador()` para el significado de `estocastico`.
+
+    Retorna
+    -------
+    np.ndarray de forma (n_simulaciones,).
+    """
+    if not estocastico:
+        return np.ones(n_simulaciones)
+
+    d = costos.opex_variacion_pct
+    u = _generar_uniformes_antiteticos(n_simulaciones, (1,), rng).ravel()
+    return _triangular_ppf_o_constante(u, 1.0 - d, 1.0, 1.0 + d)
+
+
 def _resolver_params_costos(
     params: ParametrosMC | None, costos: ParametrosCostos | None
 ) -> tuple[ParametrosMC, ParametrosCostos]:
@@ -534,25 +724,41 @@ def _orquestar_resultado(
     prices: np.ndarray,
     params: ParametrosMC,
     costos: ParametrosCostos,
+    capex_extra_usd: np.ndarray,
+    opex_multiplicador: np.ndarray,
 ) -> pd.DataFrame:
     """
     Arma el DataFrame de resultados (ingresos, OPEX, flujo neto, VAN neto) a
-    partir de arrays de rendimiento y precio ya simulados. Usado tanto por
-    `run_monte_carlo()` como por `run_monte_carlo_antitetico()` — la única
-    diferencia entre ambos es cómo se generan `yields` y `prices`.
+    partir de arrays de rendimiento, precio, CAPEX extra y multiplicador de
+    OPEX ya simulados. Usado por las tres `run_monte_carlo*()` — la única
+    diferencia entre ellas es cómo se generan esos cuatro arrays (muestreo
+    directo vs. variables antitéticas).
+
+    Parámetros
+    ----------
+    capex_extra_usd : np.ndarray
+        Forma (n_simulaciones,). CAPEX estocástico adicional (riego + pozo),
+        ver `simulate_capex_extra()`. Se SUMA a `costos.capex_inicial` (el
+        componente fijo) para obtener el CAPEX total de cada simulación.
+    opex_multiplicador : np.ndarray
+        Forma (n_simulaciones,). Ver `simulate_opex_multiplicador()`.
     """
+    n, T = yields.shape
+
     revenue = simulate_revenue(yields, prices, params.hectareas)
-    flujo_neto = flujo_caja_neto(revenue, costos)
+    flujo_neto = flujo_caja_neto(revenue, costos, opex_multiplicador)
 
     años = np.arange(1, params.n_años + 1)
     factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
-    vp_neto       = flujo_neto * factores_descuento
-    van_neto_acum = -costos.capex_inicial + np.cumsum(vp_neto, axis=1)
+    vp_neto = flujo_neto * factores_descuento
 
-    n, T = yields.shape
-    opex_por_año = np.array(
+    capex_total_usd = costos.capex_inicial + capex_extra_usd  # (n,)
+    van_neto_acum = -capex_total_usd.reshape(n, 1) + np.cumsum(vp_neto, axis=1)
+
+    opex_base_por_año = np.array(
         [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
-    )
+    ).reshape(1, T)
+    opex_real = opex_base_por_año * np.asarray(opex_multiplicador).reshape(n, 1)
 
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
@@ -560,10 +766,11 @@ def _orquestar_resultado(
         "rendimiento_kg_ha": yields.ravel(),
         "precio_usd_kg":    prices.ravel(),
         "ingreso_usd":      revenue.ravel(),
-        "opex_usd":         np.tile(opex_por_año, n),
+        "opex_usd":         opex_real.ravel(),
         "flujo_neto_usd":   flujo_neto.ravel(),
         "vp_neto_usd":      vp_neto.ravel(),
         "van_neto_usd":     van_neto_acum.ravel(),
+        "capex_extra_estocastico_usd": np.repeat(capex_extra_usd, T),
     })
 
 
@@ -575,7 +782,11 @@ def run_monte_carlo(
     Orquesta la simulación completa y retorna los resultados en formato tabular.
 
     El VAN se calcula sobre el flujo de caja neto (ingresos - OPEX), no sobre
-    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0).
+    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0),
+    e incluye tanto el componente fijo (`costos.capex_inicial`) como el
+    estocástico (riego + pozo, `simulate_capex_extra()`). El OPEX de cada año
+    se escala por un multiplicador estocástico único por simulación
+    (`simulate_opex_multiplicador()`).
 
     Parámetros
     ----------
@@ -592,15 +803,22 @@ def run_monte_carlo(
     -------
     pd.DataFrame con columnas:
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
-        ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd
+        ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd,
+        capex_extra_estocastico_usd
     """
     params, costos = _resolver_params_costos(params, costos)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
     prices = simulate_prices(params, rng)
+    capex_extra = simulate_capex_extra(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
+    opex_mult = simulate_opex_multiplicador(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
 
-    return _orquestar_resultado(yields, prices, params, costos)
+    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
 
 
 def run_monte_carlo_antitetico(
@@ -609,9 +827,11 @@ def run_monte_carlo_antitetico(
 ) -> pd.DataFrame:
     """
     Igual que `run_monte_carlo()` (misma interfaz, mismas columnas de
-    salida), pero generando rendimiento y precio con reducción de varianza
-    por variables antitéticas (`simulate_yields_antitetico`,
-    `simulate_prices_antitetico`) en vez de muestreo directo.
+    salida), pero generando rendimiento, precio, CAPEX extra y multiplicador
+    de OPEX con reducción de varianza por variables antitéticas
+    (`simulate_yields_antitetico`, `simulate_prices_antitetico`,
+    `simulate_capex_extra_antitetico`, `simulate_opex_multiplicador_antitetico`)
+    en vez de muestreo directo.
 
     Para el mismo `n_simulaciones`, el valor esperado de cada columna debería
     ser similar al de `run_monte_carlo()` — lo que cambia es la varianza del
@@ -622,8 +842,14 @@ def run_monte_carlo_antitetico(
 
     yields = simulate_yields_antitetico(params, rng)
     prices = simulate_prices_antitetico(params, rng)
+    capex_extra = simulate_capex_extra_antitetico(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
+    opex_mult = simulate_opex_multiplicador_antitetico(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
 
-    return _orquestar_resultado(yields, prices, params, costos)
+    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
 
 
 def run_monte_carlo_precio_historico(
@@ -655,8 +881,14 @@ def run_monte_carlo_precio_historico(
     prices = simulate_prices_ar1_antitetico(
         params.n_simulaciones, params.n_años, precio_params, rng
     )
+    capex_extra = simulate_capex_extra_antitetico(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
+    opex_mult = simulate_opex_multiplicador_antitetico(
+        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
+    )
 
-    return _orquestar_resultado(yields, prices, params, costos)
+    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
 
 
 def _tir_vectorizada(
@@ -700,12 +932,15 @@ def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFra
     ----------
     df : pd.DataFrame
         Salida de `run_monte_carlo()` (requiere columnas simulacion, año,
-        flujo_neto_usd, van_neto_usd).
+        flujo_neto_usd, van_neto_usd, capex_extra_estocastico_usd).
     costos : ParametrosCostos
-        Debe ser el mismo objeto (mismo `hectareas`, mismo CAPEX inicial)
+        Debe ser el mismo objeto (mismo `hectareas`, mismo CAPEX inicial fijo)
         usado para generar `df` en `run_monte_carlo()`. Es obligatorio y sin
-        default a propósito: un default silencioso acá (p. ej. hectareas=25)
-        daría un CAPEX incorrecto si `df` se generó con otra superficie.
+        default a propósito: un default silencioso acá (p. ej. hectareas=50)
+        daría un CAPEX incorrecto si `df` se generó con otra superficie. El
+        componente ESTOCÁSTICO del CAPEX (riego + pozo) no está en `costos`
+        -- varía por simulación -- así que se toma de la columna
+        `capex_extra_estocastico_usd` de `df`, no de `costos`.
 
     Retorna
     -------
@@ -715,8 +950,14 @@ def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFra
     """
     tabla_flujos = df.pivot(index="simulacion", columns="año", values="flujo_neto_usd")
     n = tabla_flujos.shape[0]
+    capex_extra = (
+        df.groupby("simulacion")["capex_extra_estocastico_usd"]
+        .first()
+        .reindex(tabla_flujos.index)
+        .values
+    )
     flujos_con_capex = np.hstack([
-        np.full((n, 1), -costos.capex_inicial),
+        (-costos.capex_inicial - capex_extra).reshape(n, 1),
         tabla_flujos.values,
     ])
 
