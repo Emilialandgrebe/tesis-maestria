@@ -314,12 +314,12 @@ flag contra el ruido de muestreo entre semillas del propio Monte Carlo
 | True  | 42   | USD 1.277.637 | USD 550.985 | USD 1.300.551 | USD 1.965.878 | 1,57% | 0,1078 |
 | True  | 123  | USD 1.279.995 | USD 561.904 | USD 1.305.201 | USD 1.984.298 | 1,79% | 0,1078 |
 | True  | 2026 | USD 1.282.468 | USD 566.754 | USD 1.300.830 | USD 1.981.215 | 1,65% | 0,1079 |
-| **False, media±d.e. entre semillas** | | **1.280.893 ± 5.519** | **546.230 ± 12.398** | | | **1,78% ± 0,06 pp** | 0,1078 |
+| **False, media±d.e. entre semillas** | | **1.280.893 ± 6.082** | **546.230 ± 12.398** | | | **1,78% ± 0,06 pp** | 0,1079 |
 | **True, media±d.e. entre semillas** | | **1.280.033 ± 2.416** | **559.881 ± 8.077** | | | **1,67% ± 0,11 pp** | 0,1079 |
 
 **Chequeo de robustez (diferencia entre flags vs. ruido entre semillas):**
 - VAN medio: la diferencia entre flags (-USD 860, 0,07%) es un orden de
-  magnitud menor que el desvío entre semillas (USD 2.400–5.500) — no
+  magnitud menor que el desvío entre semillas (USD 2.400–6.100) — no
   distinguible del ruido de muestreo del propio Monte Carlo.
 - TIR media: idéntica a la 4ta cifra decimal entre flags; diferencia
   (~0,00003) muy por debajo del desvío entre semillas.
