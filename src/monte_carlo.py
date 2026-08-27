@@ -196,65 +196,69 @@ def _muestrear_beta_por_media(
 # 2026-08-26; ver CORR_HORAS_FRIO_TMAX_VERANO más arriba para la
 # fundamentación estadística de por qué está apagada por defecto)
 #
-# Se correlacionan los FACTORES finales (factor_frio, factor_calor) -- no
-# las variables climáticas crudas (horas_frio, tmax_verano) -- vía una
-# cópula gaussiana: dos normales estándar correlacionadas por Cholesky
-# (Z1, rho*Z1 + sqrt(1-rho²)*Z2), cada una llevada a U=Phi(Z) y de ahí a la
-# Beta(alpha, beta) que ya tiene cada factor (misma reparametrización por
-# media que `_muestrear_beta_por_media`). Esto preserva exactamente la
-# marginal Beta de cada factor (ya calibrada) y solo le agrega la
-# dependencia conjunta -- no cambia el rendimiento esperado de ningún año,
-# sólo la probabilidad relativa de que frío y calor salgan malos juntos.
+# BUG CORREGIDO 2026-08-27 (detectado por /code-review ultra): una versión
+# anterior de este mecanismo aplicaba la cópula sobre los FACTORES finales
+# (factor_frio, factor_calor) -- es decir, sobre el ruido Beta residual que
+# se agrega DESPUÉS de la función de transferencia climática -- en vez de
+# sobre las variables climáticas crudas (horas_frio, tmax_verano), que es
+# donde efectivamente se midió r=-0,2894 (Módulo 0). Como la mayor parte de
+# la varianza de cada factor viene del driver climático (no del ruido
+# residual), esa versión diluía la correlación lograda a ~-0,03 en vez de
+# ~-0,29 -- un desajuste de capas, no un error de signo ni de fórmula. Ver
+# PLAN_TESIS.md para el detalle y la validación de robustez re-corrida.
+#
+# Se correlacionan HORAS_FRIO y TMAX_VERANO (las variables climáticas
+# crudas) vía cópula gaussiana. Como ambas tienen marginal Normal, la
+# cópula se reduce a una combinación lineal de dos normales estándar por
+# Cholesky (Z1, rho*Z1 + sqrt(1-rho²)*Z2) escaladas y centradas en su
+# propia media/desvío -- no hace falta pasar por U=Phi(Z) ni por una PPF,
+# a diferencia de cuando el marginal es una Beta. El ruido Beta que se
+# aplica después sobre cada factor (`_muestrear_beta_por_media`) queda
+# SIN CAMBIOS y SIN CORRELACIONAR en ambas ramas del flag -- es el mismo
+# mecanismo independiente de siempre, solo que ahora recibe como entrada
+# valores de horas/tmax_verano que ya vienen correlacionados cuando el
+# flag está en True.
 # ---------------------------------------------------------------------------
 
-def _muestrear_beta_correlacionada(
-    media_a: np.ndarray, precision_a: float,
-    media_b: np.ndarray, precision_b: float,
-    rho: float, rng: np.random.Generator,
+def _muestrear_clima_correlacionado(
+    horas_frio_media: float, horas_frio_std: float,
+    calor_verano_media: float, calor_verano_std: float,
+    rho: float, shape: tuple[int, ...], rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Muestrea dos Beta (reparametrizadas por media y precisión, igual que
-    `_muestrear_beta_por_media`) con correlación `rho` entre sí, vía cópula
-    gaussiana. Retorna (a, b), cada una de forma `media_a.shape`.
+    Muestrea horas de frío y tmax de verano CORRELACIONADAS (r=`rho`) vía
+    cópula gaussiana. Retorna (horas, tmax_verano), cada una de forma
+    `shape`.
     """
-    alpha_a, beta_a = _alpha_beta_por_media(media_a, precision_a)
-    alpha_b, beta_b = _alpha_beta_por_media(media_b, precision_b)
-
-    z1 = rng.standard_normal(media_a.shape)
-    z2_indep = rng.standard_normal(media_a.shape)
-    z2 = rho * z1 + np.sqrt(1 - rho**2) * z2_indep
-
-    a = beta_dist.ppf(norm.cdf(z1), alpha_a, beta_a)
-    b = beta_dist.ppf(norm.cdf(z2), alpha_b, beta_b)
-    return a, b
+    z1 = rng.standard_normal(shape)
+    z2 = rho * z1 + np.sqrt(1 - rho**2) * rng.standard_normal(shape)
+    horas = horas_frio_media + horas_frio_std * z1
+    tmax_verano = calor_verano_media + calor_verano_std * z2
+    return horas, tmax_verano
 
 
-def _muestrear_beta_correlacionada_antitetico(
-    media_a: np.ndarray, precision_a: float,
-    media_b: np.ndarray, precision_b: float,
-    rho: float, rng: np.random.Generator,
+def _muestrear_clima_correlacionado_antitetico(
+    horas_frio_media: float, horas_frio_std: float,
+    calor_verano_media: float, calor_verano_std: float,
+    rho: float, n: int, T: int, rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Versión de `_muestrear_beta_correlacionada()` con reducción de varianza
-    por variables antitéticas: `z1` y `z2_indep` se arman cada una desde su
-    propio par de uniformes antitéticos (`_generar_uniformes_antiteticos`)
-    vía `norm.ppf`, ANTES de combinarlas por Cholesky. Una combinación
+    Versión de `_muestrear_clima_correlacionado()` con reducción de
+    varianza por variables antitéticas: `z1` y `z2_indep` se arman cada uno
+    desde su propio par de uniformes antitéticos
+    (`_generar_uniformes_antiteticos`) vía `norm.ppf`, ANTES de combinarlos
+    por Cholesky -- mismo patrón que el resto del motor. Una combinación
     lineal de dos normales antitéticas (segunda mitad = -primera mitad) es
     a su vez antitética, así que `z2` conserva la propiedad aunque sea una
     mezcla de `z1` y `z2_indep`.
     """
-    n, T = media_a.shape
-    alpha_a, beta_a = _alpha_beta_por_media(media_a, precision_a)
-    alpha_b, beta_b = _alpha_beta_por_media(media_b, precision_b)
-
     u1 = _generar_uniformes_antiteticos(n, (T,), rng)
     u2 = _generar_uniformes_antiteticos(n, (T,), rng)
     z1 = norm.ppf(u1)
     z2 = rho * z1 + np.sqrt(1 - rho**2) * norm.ppf(u2)
-
-    a = beta_dist.ppf(norm.cdf(z1), alpha_a, beta_a)
-    b = beta_dist.ppf(norm.cdf(z2), alpha_b, beta_b)
-    return a, b
+    horas = horas_frio_media + horas_frio_std * z1
+    tmax_verano = calor_verano_media + calor_verano_std * z2
+    return horas, tmax_verano
 
 
 def _producto_esperado_factores() -> float:
@@ -485,26 +489,33 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     )
     factor_veceria = np.where(es_bajo, factores_bajos, 1.0)
 
-    # --- Horas de frío ---
-    u_horas = _generar_uniformes_antiteticos(n, (T,), rng)
-    horas = norm.ppf(u_horas, loc=params.horas_frio_media, scale=params.horas_frio_std)
-    media_ff = _media_factor_frio(horas)
-
-    # --- Frío y calor: correlacionados (cópula gaussiana) o independientes ---
-    # Igual que en simulate_yields(), la rama `False` preserva EXACTAMENTE
-    # el orden de consumo de `rng` de antes de agregar esta fuente, para no
-    # cambiar en silencio ningún resultado ya documentado con el flag apagado
-    # (default).
+    # --- Frío y calor: variables climáticas correlacionadas (cópula
+    # gaussiana) o independientes; el ruido Beta sobre cada factor es
+    # SIEMPRE independiente (ver comentario más arriba, junto a
+    # `_muestrear_clima_correlacionado_antitetico`). La rama `False`
+    # preserva EXACTAMENTE el orden de consumo de `rng` de antes de agregar
+    # esta fuente, para no cambiar en silencio ningún resultado ya
+    # documentado con el flag apagado (default).
     if params.correlacionar_frio_calor:
-        u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
-        tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
-        media_fc = _media_factor_calor(tmax_verano)
-        factor_frio, factor_calor = _muestrear_beta_correlacionada_antitetico(
-            media_ff, params.precision_factor_frio,
-            media_fc, params.precision_factor_calor,
-            CORR_HORAS_FRIO_TMAX_VERANO, rng,
+        horas, tmax_verano = _muestrear_clima_correlacionado_antitetico(
+            params.horas_frio_media, params.horas_frio_std,
+            params.calor_verano_media, params.calor_verano_std,
+            CORR_HORAS_FRIO_TMAX_VERANO, n, T, rng,
         )
+        media_ff = _media_factor_frio(horas)
+        alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
+        u_frio = _generar_uniformes_antiteticos(n, (T,), rng)
+        factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
+
+        media_fc = _media_factor_calor(tmax_verano)
+        alpha_fc, beta_fc = _alpha_beta_por_media(media_fc, params.precision_factor_calor)
+        u_calor = _generar_uniformes_antiteticos(n, (T,), rng)
+        factor_calor = beta_dist.ppf(u_calor, alpha_fc, beta_fc)
     else:
+        u_horas = _generar_uniformes_antiteticos(n, (T,), rng)
+        horas = norm.ppf(u_horas, loc=params.horas_frio_media, scale=params.horas_frio_std)
+        media_ff = _media_factor_frio(horas)
+
         alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
         u_frio = _generar_uniformes_antiteticos(n, (T,), rng)
         factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
@@ -558,12 +569,25 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
        — media determinística + ruido Beta(media, precision_factor_calor)
     5. Tasa de falla de plantas — Beta(alpha, beta)
 
-    Si `params.correlacionar_frio_calor` es True, los factores 3 y 4 se
-    muestrean CORRELACIONADOS (r=`CORR_HORAS_FRIO_TMAX_VERANO`) vía cópula
+    Si `params.correlacionar_frio_calor` es True, las variables climáticas
+    de las que salen los factores 3 y 4 (horas de frío, tmax de verano) se
+    muestrean CORRELACIONADAS (r=`CORR_HORAS_FRIO_TMAX_VERANO`) vía cópula
     gaussiana en vez de independientes -- ver esa constante y
-    `_muestrear_beta_correlacionada()` para la fundamentación y el mecanismo.
-    Default apagado: la correlación empírica no es significativa al 5%
+    `_muestrear_clima_correlacionado()` para la fundamentación y el
+    mecanismo. El ruido Beta que se aplica sobre cada factor
+    (`_muestrear_beta_por_media`) es siempre independiente, en ambas ramas
+    del flag -- solo cambia si horas/tmax_verano vienen correlacionadas o
+    no. Default apagado: la correlación empírica no es significativa al 5%
     (ver notas/PLAN_TESIS.md, 2026-08-26).
+
+    LIMITACIÓN CONOCIDA de la comparación True vs. False con semilla fija:
+    aun con este mecanismo, activar el flag consume el stream de `rng` en
+    un orden distinto al de la rama `False` (el propio Cholesky mezcla las
+    dos normales estándar antes de escalarlas), así que una comparación
+    determinística no aísla EXCLUSIVAMENTE el efecto de la correlación --
+    para eso hace falta comparar distribuciones agregadas (como en la
+    tabla de robustez de PLAN_TESIS.md), no realizaciones individuales
+    pareadas por posición.
 
     Parámetros
     ----------
@@ -584,22 +608,26 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
 
     factor_veceria = _simular_veceria(params, rng)
 
-    horas = rng.normal(params.horas_frio_media, params.horas_frio_std, (n, T))
-    media_ff = _media_factor_frio(horas)
-
-    # Frío y calor: correlacionados (cópula gaussiana) o independientes. La
-    # rama `False` preserva EXACTAMENTE el orden de consumo de `rng` previo
-    # a agregar esta fuente, para no cambiar en silencio ningún resultado ya
-    # documentado con el flag apagado (default).
+    # Frío y calor: variables climáticas correlacionadas (cópula gaussiana)
+    # o independientes; el ruido Beta sobre cada factor es SIEMPRE
+    # independiente (ver comentario junto a `_muestrear_clima_correlacionado`
+    # más arriba). La rama `False` preserva EXACTAMENTE el orden de consumo
+    # de `rng` previo a agregar esta fuente, para no cambiar en silencio
+    # ningún resultado ya documentado con el flag apagado (default).
     if params.correlacionar_frio_calor:
-        tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
-        media_fc = _media_factor_calor(tmax_verano)
-        factor_frio, factor_calor = _muestrear_beta_correlacionada(
-            media_ff, params.precision_factor_frio,
-            media_fc, params.precision_factor_calor,
-            CORR_HORAS_FRIO_TMAX_VERANO, rng,
+        horas, tmax_verano = _muestrear_clima_correlacionado(
+            params.horas_frio_media, params.horas_frio_std,
+            params.calor_verano_media, params.calor_verano_std,
+            CORR_HORAS_FRIO_TMAX_VERANO, (n, T), rng,
         )
+        media_ff = _media_factor_frio(horas)
+        factor_frio = _muestrear_beta_por_media(media_ff, params.precision_factor_frio, rng)
+
+        media_fc = _media_factor_calor(tmax_verano)
+        factor_calor = _muestrear_beta_por_media(media_fc, params.precision_factor_calor, rng)
     else:
+        horas = rng.normal(params.horas_frio_media, params.horas_frio_std, (n, T))
+        media_ff = _media_factor_frio(horas)
         factor_frio = _muestrear_beta_por_media(media_ff, params.precision_factor_frio, rng)
 
         tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))

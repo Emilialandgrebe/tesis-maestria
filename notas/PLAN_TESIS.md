@@ -285,65 +285,123 @@ horas de frío y `tmax_media_verano_c` de **r = -0,2894** (p = 0,0918, n = 35).
 **Decisión:** se agregó `ParametrosMC.correlacionar_frio_calor: bool = False`
 (`src/monte_carlo.py`) con el mismo criterio que `capex_opex_estocastico`:
 apagado por defecto porque la evidencia es marginal, disponible para
-análisis de robustez explícito. La correlación (`CORR_HORAS_FRIO_TMAX_VERANO
-= -0,2894`) se aplica entre los FACTORES finales `factor_frio`/`factor_calor`
-(no entre las variables climáticas crudas) vía una **cópula gaussiana**:
-`_muestrear_beta_correlacionada()` arma dos normales estándar correlacionadas
-por Cholesky (`Z1`, `rho·Z1 + sqrt(1-rho²)·Z2`), las lleva a `U = Phi(Z)` y de
-ahí a la Beta de cada factor (misma reparametrización por media que
-`_muestrear_beta_por_media`), preservando exactamente la marginal Beta ya
-calibrada de cada factor. `_muestrear_beta_correlacionada_antitetico()` es la
-versión con variables antitéticas, siguiendo el mismo patrón que el resto del
-motor. Con el flag en `False`, el orden de consumo de `rng` en
-`simulate_yields()`/`simulate_yields_antitetico()` es idéntico al de antes de
-este cambio (verificado: la fila `correlacionar_frio_calor=False, semilla=42`
-de la tabla de abajo reproduce exacto la columna "CAPEX/OPEX estocásticos" de
-la tabla de la entrada anterior).
+análisis de robustez explícito.
+
+**BUG DE IMPLEMENTACIÓN CORREGIDO (2026-08-27, detectado por `/code-review
+ultra`):** la primera versión de este mecanismo aplicaba la cópula gaussiana
+sobre los FACTORES finales `factor_frio`/`factor_calor` — es decir, sobre el
+ruido Beta residual que se agrega DESPUÉS de la función de transferencia
+climática — en vez de sobre las variables climáticas crudas (`horas_frio`,
+`tmax_verano`), que es donde efectivamente se midió `r=-0,2894`. Como la
+mayor parte de la varianza de cada factor viene del driver climático y no
+del ruido residual, esa versión diluía la correlación lograda a **≈-0,03**
+en la práctica (verificado numéricamente, n=50.000), no los -0,29
+documentados — un desajuste de capas, no un error de signo ni de fórmula.
+Esta sección fue **reescrita**, no solo corregida: el mecanismo cambió de
+raíz y toda la validación de robustez de abajo se volvió a correr desde
+cero, porque los números de la versión anterior correspondían a un efecto
+~10x más débil que el real.
+
+**Mecanismo corregido:** la correlación (`CORR_HORAS_FRIO_TMAX_VERANO =
+-0,2894`) se aplica entre las variables climáticas crudas `horas_frio` y
+`tmax_verano` vía **cópula gaussiana** (`_muestrear_clima_correlacionado()`):
+como ambas tienen marginal Normal, la cópula se reduce a una combinación
+lineal de dos normales estándar por Cholesky (`Z1`, `rho·Z1 +
+sqrt(1-rho²)·Z2`) escaladas y centradas en su propia media/desvío — no hace
+falta pasar por `U=Phi(Z)` ni por una PPF, a diferencia de cuando el
+marginal es una Beta. El ruido Beta que se aplica después sobre cada factor
+(`_muestrear_beta_por_media`) queda **sin cambios y sin correlacionar en
+ambas ramas del flag** — recibe como entrada valores de horas/tmax_verano ya
+correlacionados cuando el flag está en `True`, pero el muestreo del ruido en
+sí es siempre independiente y usa el mismo `rng.beta` en las dos ramas (esto
+además resuelve, por diseño, un hallazgo separado del mismo review: antes
+las ramas True/False muestreaban la Beta con dos algoritmos distintos —
+`rng.beta` vs. `beta.ppf(norm.cdf(z),...)` — lo cual mezclaba "efecto de la
+correlación" con "efecto de cambiar de algoritmo de muestreo" en la
+comparación con semilla fija; ahora ambas ramas usan exactamente el mismo
+muestreo de ruido). `_muestrear_clima_correlacionado_antitetico()` es la
+versión con variables antitéticas, siguiendo el mismo patrón que el resto
+del motor. Con el flag en `False`, el orden de consumo de `rng` en
+`simulate_yields()`/`simulate_yields_antitetico()` sigue siendo idéntico al
+de antes de agregar esta fuente (verificado: la fila
+`correlacionar_frio_calor=False, semilla=42` de la tabla de abajo reproduce
+exacto el mismo valor que antes del fix y que la columna "CAPEX/OPEX
+estocásticos" de la entrada anterior — el bug y su corrección solo tocaron
+la rama `True`).
+
+Sigue habiendo una limitación inherente en la comparación True vs. False con
+semilla fija, documentada en el docstring de `simulate_yields()`: activar el
+flag cambia el orden en que Cholesky consume el stream de `rng`, así que una
+comparación realización-por-realización no aísla `100%` el efecto de la
+correlación — por eso la validación de abajo compara distribuciones
+agregadas (10.000 simulaciones, 3 semillas), no pares de corridas individuales.
 
 **Validación de robustez** — 50 ha, 10.000 simulaciones, escenario base,
 `capex_opex_estocastico=True`, `run_monte_carlo()`, sobre `van_neto_usd` al
 año 20, con 3 semillas por valor del flag para poder comparar el efecto del
-flag contra el ruido de muestreo entre semillas del propio Monte Carlo
-(script: `notas/robustez_correlacion_frio_calor.csv`):
+flag contra el ruido de muestreo entre semillas del propio Monte Carlo.
+**Tabla completa re-corrida con el mecanismo corregido** (script:
+`notas/robustez_correlacion_frio_calor.csv`; los valores de la fila `False`
+son idénticos a los de la versión anterior de esta tabla, como corresponde
+ya que el bug solo afectaba la rama `True`):
 
 | `correlacionar_frio_calor` | semilla | VAN medio | VAN P10 | VAN P50 | VAN P90 | P(VAN<0) | TIR media |
 |---|---|---|---|---|---|---|---|
-| False | 42   | USD 1.273.871 | USD 539.401 | USD 1.295.835 | USD 1.977.604 | 1,72% | 0,1077 |
-| False | 123  | USD 1.284.467 | USD 560.541 | USD 1.307.785 | USD 1.978.445 | 1,79% | 0,1079 |
-| False | 2026 | USD 1.284.341 | USD 538.747 | USD 1.311.510 | USD 1.998.751 | 1,84% | 0,1079 |
-| True  | 42   | USD 1.277.637 | USD 550.985 | USD 1.300.551 | USD 1.965.878 | 1,57% | 0,1078 |
-| True  | 123  | USD 1.279.995 | USD 561.904 | USD 1.305.201 | USD 1.984.298 | 1,79% | 0,1078 |
-| True  | 2026 | USD 1.282.468 | USD 566.754 | USD 1.300.830 | USD 1.981.215 | 1,65% | 0,1079 |
-| **False, media±d.e. entre semillas** | | **1.280.893 ± 6.082** | **546.230 ± 12.398** | | | **1,78% ± 0,06 pp** | 0,1079 |
-| **True, media±d.e. entre semillas** | | **1.280.033 ± 2.416** | **559.881 ± 8.077** | | | **1,67% ± 0,11 pp** | 0,1079 |
+| False | 42   | USD 1.273.871 | USD 539.401 | USD 1.295.835 | USD 1.977.604 | 1,72% | 0,10773 |
+| False | 123  | USD 1.284.467 | USD 560.541 | USD 1.307.785 | USD 1.978.445 | 1,79% | 0,10792 |
+| False | 2026 | USD 1.284.341 | USD 538.747 | USD 1.311.510 | USD 1.998.751 | 1,84% | 0,10793 |
+| True  | 42   | USD 1.268.817 | USD 552.352 | USD 1.283.303 | USD 1.964.856 | 1,44% | 0,10766 |
+| True  | 123  | USD 1.275.711 | USD 551.527 | USD 1.297.385 | USD 1.964.454 | 1,55% | 0,10776 |
+| True  | 2026 | USD 1.277.296 | USD 544.006 | USD 1.308.047 | USD 1.967.939 | 1,66% | 0,10780 |
+| **False, media±d.e. entre semillas** | | **1.280.893 ± 6.082** | **546.230 ± 12.398** | | | **1,78% ± 0,06 pp** | 0,10786 |
+| **True, media±d.e. entre semillas** | | **1.273.941 ± 4.508** | **549.295 ± 4.599** | | | **1,55% ± 0,11 pp** | 0,10774 |
 
 **Chequeo de robustez (diferencia entre flags vs. ruido entre semillas):**
-- VAN medio: la diferencia entre flags (-USD 860, 0,07%) es un orden de
-  magnitud menor que el desvío entre semillas (USD 2.400–6.100) — no
-  distinguible del ruido de muestreo del propio Monte Carlo.
-- TIR media: idéntica a la 4ta cifra decimal entre flags; diferencia
-  (~0,00003) muy por debajo del desvío entre semillas.
-- P(VAN<0): diferencia entre flags (-0,11 pp) del mismo orden que el desvío
-  entre semillas (0,06–0,11 pp) — no hay separación clara.
-- VAN P10: acá aparece la señal más consistente con la predicción de que la
-  correlación negativa actúa como cobertura natural (un año de poco frío
-  tiende a acompañarse de más calor, y viceversa, amortiguando el peor caso
-  conjunto) — el P10 sube USD 13.651 (546.230 → 559.881) al activar el flag,
-  una diferencia algo mayor que el desvío entre semillas de cada grupo
-  (12.398 y 8.077) pero no lo suficiente para ser concluyente con solo 3
+- VAN medio: la diferencia entre flags (-USD 6.952, -0,54%) ahora es del
+  mismo orden que el desvío entre semillas (USD 4.500–6.100) — más grande
+  que la diferencia de -USD 860 que arrojaba la versión con el bug, pero
+  sigue sin ser claramente distinguible del ruido de muestreo con solo 3
   semillas por grupo.
+- TIR media: diferencia entre flags ≈-0,00012 (recalculada desde los valores
+  exactos de la tabla; la versión anterior de esta línea decía "~0,00003",
+  que también estaba mal — el valor correcto de la versión *anterior* del
+  mecanismo era ≈0,0000026, no 0,00003, un segundo error aritmético en esta
+  sección que `accc6fa` no llegó a corregir). Con el mecanismo nuevo la
+  diferencia real (-0,00012) es del mismo orden que el desvío entre semillas
+  (0,00008–0,00011).
+- P(VAN<0): diferencia entre flags (**-0,23 pp**, 1,78%→1,55%) — esta es la
+  señal más clara de las cuatro métricas: 2–4 veces el desvío entre semillas
+  (0,06–0,11 pp), en la dirección que predice la hipótesis de cobertura
+  natural (activar la correlación negativa REDUCE la probabilidad de VAN
+  negativo).
+- VAN P10: diferencia entre flags (+USD 3.065, 546.230→549.295) — con el
+  mecanismo corregido esta es ahora la señal MÁS débil de las cuatro, muy
+  por debajo del desvío entre semillas (USD 4.599–12.398). La versión con el
+  bug había mostrado acá la señal más fuerte (+USD 13.651) — ese resultado
+  no se sostiene con la correlación real y correctamente ubicada; fue en
+  buena medida un artefacto de qué seeds tocaron el grupo `True` diluido,
+  no evidencia genuina de cobertura natural vía P10.
 
-**Conclusión:** el efecto de `correlacionar_frio_calor` sobre el resultado
-financiero es pequeño y, para la mayoría de las métricas, no se distingue
-del ruido de muestreo entre semillas del propio Monte Carlo — coherente con
-que r=-0,2894 no sea estadísticamente significativo (IC95% cruza el cero,
-potencia ~39%). Hay un indicio (no concluyente) de que la correlación reduce
-la cola izquierda del VAN (P10 más alto), en la dirección que predice la
-hipótesis de cobertura natural frío/calor, pero `P(VAN<0)` no lo confirma de
-forma clara. Esto refuerza la decisión de dejar el flag apagado por defecto:
-no hay evidencia suficientemente fuerte, ni en los datos climáticos ni en su
-efecto financiero, para justificar modelar esta dependencia como parte del
-motor "oficial" — queda disponible como análisis de sensibilidad explícito.
+**Conclusión:** con el mecanismo corregido, el efecto de
+`correlacionar_frio_calor` sobre el resultado financiero es más grande que
+lo que sugería la versión con el bug (la diferencia en VAN medio pasó de
+-USD 860 a -USD 6.952, casi 8x), pero para VAN medio y TIR media sigue
+siendo del mismo orden que el ruido de muestreo entre semillas — no
+concluyente con solo 3 semillas por grupo. La señal más clara y consistente
+con la hipótesis de cobertura natural (frío malo y calor malo tienden a no
+coincidir) aparece ahora en `P(VAN<0)`, no en el P10 como sugería
+erróneamente la versión con el bug. Esto sigue siendo coherente con que
+r=-0,2894 no sea estadísticamente significativo al 5% (IC95% cruza el cero,
+potencia ~39%): el efecto financiero es real y algo más grande de lo
+estimado originalmente, pero no lo bastante fuerte ni consistente entre
+métricas como para justificar modelar esta dependencia como parte del motor
+"oficial". Se mantiene la decisión de dejar el flag apagado por defecto,
+disponible como análisis de sensibilidad explícito — con la salvedad de que,
+a diferencia de la conclusión anterior, ahora hay evidencia algo más sólida
+(P(VAN<0) separado 2–4x del ruido de semillas) de que el efecto no es
+enteramente despreciable, y valdría la pena repetir esta validación con más
+de 3 semillas si en algún momento se necesita una conclusión firme al
+respecto.
 
 ## Problemas abiertos
 
