@@ -43,6 +43,16 @@ _VECERIA_FACTOR_MAX = 0.70
 _PLANTAS_ALPHA = 2.0     # falla de plantas ~ Beta(alpha, beta), media ~9%
 _PLANTAS_BETA = 20.0
 
+# Correlación empírica horas_frio vs. tmax_media_verano_c (Módulo 0,
+# data/processed/features_climaticas.parquet, 35 años ERA5-Land Jocolí
+# 1990-2024): Pearson r=-0.2894, p=0.0918. NO significativa al 5% (n=35 le
+# da ~39% de potencia para detectar un r de esta magnitud, y el IC95% de
+# Fisher es aprox. [-0.57, +0.05] -- incluye el cero con margen). Por eso
+# NO se modela por defecto (`ParametrosMC.correlacionar_frio_calor=False`);
+# ver notas/PLAN_TESIS.md, 2026-08-26, para la fundamentación completa y el
+# chequeo de robustez contra el ruido de muestreo del propio Monte Carlo.
+CORR_HORAS_FRIO_TMAX_VERANO = -0.2894
+
 # Fracción del rendimiento pleno por año del proyecto (1–20)
 _CURVA_BASE: dict[int, float] = {
     1: 0.00, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00,
@@ -181,6 +191,72 @@ def _muestrear_beta_por_media(
     return rng.beta(alpha, beta)
 
 
+# ---------------------------------------------------------------------------
+# Correlación empírica frío/calor vía cópula gaussiana (PLAN_TESIS.md,
+# 2026-08-26; ver CORR_HORAS_FRIO_TMAX_VERANO más arriba para la
+# fundamentación estadística de por qué está apagada por defecto)
+#
+# Se correlacionan los FACTORES finales (factor_frio, factor_calor) -- no
+# las variables climáticas crudas (horas_frio, tmax_verano) -- vía una
+# cópula gaussiana: dos normales estándar correlacionadas por Cholesky
+# (Z1, rho*Z1 + sqrt(1-rho²)*Z2), cada una llevada a U=Phi(Z) y de ahí a la
+# Beta(alpha, beta) que ya tiene cada factor (misma reparametrización por
+# media que `_muestrear_beta_por_media`). Esto preserva exactamente la
+# marginal Beta de cada factor (ya calibrada) y solo le agrega la
+# dependencia conjunta -- no cambia el rendimiento esperado de ningún año,
+# sólo la probabilidad relativa de que frío y calor salgan malos juntos.
+# ---------------------------------------------------------------------------
+
+def _muestrear_beta_correlacionada(
+    media_a: np.ndarray, precision_a: float,
+    media_b: np.ndarray, precision_b: float,
+    rho: float, rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Muestrea dos Beta (reparametrizadas por media y precisión, igual que
+    `_muestrear_beta_por_media`) con correlación `rho` entre sí, vía cópula
+    gaussiana. Retorna (a, b), cada una de forma `media_a.shape`.
+    """
+    alpha_a, beta_a = _alpha_beta_por_media(media_a, precision_a)
+    alpha_b, beta_b = _alpha_beta_por_media(media_b, precision_b)
+
+    z1 = rng.standard_normal(media_a.shape)
+    z2_indep = rng.standard_normal(media_a.shape)
+    z2 = rho * z1 + np.sqrt(1 - rho**2) * z2_indep
+
+    a = beta_dist.ppf(norm.cdf(z1), alpha_a, beta_a)
+    b = beta_dist.ppf(norm.cdf(z2), alpha_b, beta_b)
+    return a, b
+
+
+def _muestrear_beta_correlacionada_antitetico(
+    media_a: np.ndarray, precision_a: float,
+    media_b: np.ndarray, precision_b: float,
+    rho: float, rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Versión de `_muestrear_beta_correlacionada()` con reducción de varianza
+    por variables antitéticas: `z1` y `z2_indep` se arman cada una desde su
+    propio par de uniformes antitéticos (`_generar_uniformes_antiteticos`)
+    vía `norm.ppf`, ANTES de combinarlas por Cholesky. Una combinación
+    lineal de dos normales antitéticas (segunda mitad = -primera mitad) es
+    a su vez antitética, así que `z2` conserva la propiedad aunque sea una
+    mezcla de `z1` y `z2_indep`.
+    """
+    n, T = media_a.shape
+    alpha_a, beta_a = _alpha_beta_por_media(media_a, precision_a)
+    alpha_b, beta_b = _alpha_beta_por_media(media_b, precision_b)
+
+    u1 = _generar_uniformes_antiteticos(n, (T,), rng)
+    u2 = _generar_uniformes_antiteticos(n, (T,), rng)
+    z1 = norm.ppf(u1)
+    z2 = rho * z1 + np.sqrt(1 - rho**2) * norm.ppf(u2)
+
+    a = beta_dist.ppf(norm.cdf(z1), alpha_a, beta_a)
+    b = beta_dist.ppf(norm.cdf(z2), alpha_b, beta_b)
+    return a, b
+
+
 def _producto_esperado_factores() -> float:
     """
     Producto de los valores esperados de los cuatro factores estocásticos de
@@ -263,6 +339,14 @@ class ParametrosMC:
     # bayesiana (ver notas/PLAN_TESIS.md, Paso 4).
     precision_factor_frio: float = 15.0
     precision_factor_calor: float = 15.0
+
+    # Correlación empírica frío/calor (r=-0.2894, no significativa al 5%,
+    # ver CORR_HORAS_FRIO_TMAX_VERANO más arriba) -- default apagado, mismo
+    # criterio que `capex_opex_estocastico`: el motor "oficial" no asume
+    # dependencia entre frío y calor salvo que se pida explícito, dado que
+    # la evidencia estadística es marginal. Pensado como análisis de
+    # robustez (correr True vs. False y comparar), no como calibración.
+    correlacionar_frio_calor: bool = False
 
     # Vecería: cadena de Markov sobre estado alto/bajo
     p_bajo_si_alto: float = _P_BAJO_SI_ALTO
@@ -405,17 +489,32 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     u_horas = _generar_uniformes_antiteticos(n, (T,), rng)
     horas = norm.ppf(u_horas, loc=params.horas_frio_media, scale=params.horas_frio_std)
     media_ff = _media_factor_frio(horas)
-    alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
-    u_frio = _generar_uniformes_antiteticos(n, (T,), rng)
-    factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
 
-    # --- Calor estival ---
-    u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
-    tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
-    media_fc = _media_factor_calor(tmax_verano)
-    alpha_fc, beta_fc = _alpha_beta_por_media(media_fc, params.precision_factor_calor)
-    u_calor = _generar_uniformes_antiteticos(n, (T,), rng)
-    factor_calor = beta_dist.ppf(u_calor, alpha_fc, beta_fc)
+    # --- Frío y calor: correlacionados (cópula gaussiana) o independientes ---
+    # Igual que en simulate_yields(), la rama `False` preserva EXACTAMENTE
+    # el orden de consumo de `rng` de antes de agregar esta fuente, para no
+    # cambiar en silencio ningún resultado ya documentado con el flag apagado
+    # (default).
+    if params.correlacionar_frio_calor:
+        u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
+        tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
+        media_fc = _media_factor_calor(tmax_verano)
+        factor_frio, factor_calor = _muestrear_beta_correlacionada_antitetico(
+            media_ff, params.precision_factor_frio,
+            media_fc, params.precision_factor_calor,
+            CORR_HORAS_FRIO_TMAX_VERANO, rng,
+        )
+    else:
+        alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
+        u_frio = _generar_uniformes_antiteticos(n, (T,), rng)
+        factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
+
+        u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
+        tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
+        media_fc = _media_factor_calor(tmax_verano)
+        alpha_fc, beta_fc = _alpha_beta_por_media(media_fc, params.precision_factor_calor)
+        u_calor = _generar_uniformes_antiteticos(n, (T,), rng)
+        factor_calor = beta_dist.ppf(u_calor, alpha_fc, beta_fc)
 
     # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
     u_supervivencia = _generar_uniformes_antiteticos(n, (1,), rng)
@@ -459,6 +558,13 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
        — media determinística + ruido Beta(media, precision_factor_calor)
     5. Tasa de falla de plantas — Beta(alpha, beta)
 
+    Si `params.correlacionar_frio_calor` es True, los factores 3 y 4 se
+    muestrean CORRELACIONADOS (r=`CORR_HORAS_FRIO_TMAX_VERANO`) vía cópula
+    gaussiana en vez de independientes -- ver esa constante y
+    `_muestrear_beta_correlacionada()` para la fundamentación y el mecanismo.
+    Default apagado: la correlación empírica no es significativa al 5%
+    (ver notas/PLAN_TESIS.md, 2026-08-26).
+
     Parámetros
     ----------
     params : ParametrosMC
@@ -480,11 +586,25 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
 
     horas = rng.normal(params.horas_frio_media, params.horas_frio_std, (n, T))
     media_ff = _media_factor_frio(horas)
-    factor_frio = _muestrear_beta_por_media(media_ff, params.precision_factor_frio, rng)
 
-    tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
-    media_fc = _media_factor_calor(tmax_verano)
-    factor_calor = _muestrear_beta_por_media(media_fc, params.precision_factor_calor, rng)
+    # Frío y calor: correlacionados (cópula gaussiana) o independientes. La
+    # rama `False` preserva EXACTAMENTE el orden de consumo de `rng` previo
+    # a agregar esta fuente, para no cambiar en silencio ningún resultado ya
+    # documentado con el flag apagado (default).
+    if params.correlacionar_frio_calor:
+        tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
+        media_fc = _media_factor_calor(tmax_verano)
+        factor_frio, factor_calor = _muestrear_beta_correlacionada(
+            media_ff, params.precision_factor_frio,
+            media_fc, params.precision_factor_calor,
+            CORR_HORAS_FRIO_TMAX_VERANO, rng,
+        )
+    else:
+        factor_frio = _muestrear_beta_por_media(media_ff, params.precision_factor_frio, rng)
+
+        tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
+        media_fc = _media_factor_calor(tmax_verano)
+        factor_calor = _muestrear_beta_por_media(media_fc, params.precision_factor_calor, rng)
 
     # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
     supervivencia = 1.0 - rng.beta(params.plantas_alpha, params.plantas_beta, (n, 1))
