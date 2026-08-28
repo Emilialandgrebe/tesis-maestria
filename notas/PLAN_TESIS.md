@@ -102,6 +102,21 @@ el AR(1): no es una regresión, es la corrección de un sesgo del modelo viejo,
 que trataba el riesgo de precio como idiosincrático (se diluye en 15 años de
 producción) cuando en realidad es sistemático/persistente.
 
+### No había dataset sintético para ML
+
+Resuelto el 2026-07-11 (commit `06b7472`). `src/dataset_ml.py` barre el
+espacio de parámetros con Latin Hypercube Sampling (8 parámetros continuos
+de `ESPACIO_PARAMETROS` × 3 escenarios de precio) y evalúa el simulador real
+en cada punto (`run_monte_carlo_precio_historico` + `resumen_financiero`),
+generando un dataset para *emular* el simulador (surrogate modeling), no para
+predecir un rendimiento agroclimático observado. Salida en
+`data/processed/dataset_ml_{train,test}.parquet` (2400 y 600 filas × 19
+columnas; train y test son diseños LHS independientes, semillas 42 y 2026).
+Targets: `van_neto_medio_usd` (regresión) y `prob_van_negativo` (riesgo).
+`src/entrenar_modelo.py` entrena Random Forest y LightGBM sobre él (commit
+`d2d2474`). Última regeneración: 2026-08-28 (Fase 3, ver la entrada de esa
+fecha más abajo) — sin cambios numéricos.
+
 ### Superficie por defecto seguía en 25 ha y el CAPEX/OPEX eran 100% determinísticos dentro del Monte Carlo
 
 Resuelto el 2026-08-26. Dos cambios relacionados sobre `src/monte_carlo.py` y
@@ -482,10 +497,6 @@ Algunos números que están en el código son supuestos que hay que citar o just
 ### Inferencia bayesiana pendiente
 
 Ver Paso 4 más abajo — reemplazar los supuestos ad hoc de frío/vecería por estimaciones con MCMC (PyMC).
-
-### Dataset sintético para ML pendiente
-
-Barrer el espacio de parámetros con `simulate_yields()` para generar un dataset sintético de entrenamiento (capa 3 de la arquitectura de datos del proyecto). Todavía no existe ningún archivo para esto en el repo.
 
 ### Deuda técnica menor en `src/costos.py`/`src/monte_carlo.py`
 
