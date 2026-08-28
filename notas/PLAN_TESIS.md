@@ -403,6 +403,71 @@ enteramente despreciable, y valdría la pena repetir esta validación con más
 de 3 semillas si en algún momento se necesita una conclusión firme al
 respecto.
 
+### `dataset_ml.py` y `sensibilidad.py` fijan CAPEX/OPEX estocástico y correlación frío/calor en `False`
+
+Resuelto el 2026-08-28 (Fase 3). Cierra el pendiente detectado por
+`/code-review ultra` el 2026-08-26 (detalle del problema al final de esta
+entrada).
+
+**Decisión:** `src/dataset_ml.py` (`evaluar_punto()`) y `src/sensibilidad.py`
+(`_evaluar_metrica()`) ahora construyen `ParametrosMC` con
+`capex_opex_estocastico=False` y `correlacionar_frio_calor=False` **explícitos**
+(antes heredaban el default del motor `capex_opex_estocastico=True` en
+silencio). Fundamentación: el barrido LHS mide sensibilidad a los parámetros
+de `ESPACIO_PARAMETROS`, y Sobol descompone la varianza atribuible a las 6
+variables de `PROBLEMA_SOBOL`. El ruido de CAPEX/OPEX estocástico y la
+correlación frío/calor son fuentes de variabilidad intra-simulación que las
+Fases 1-2 agregaron al motor y que **no son inputs controlados** de ninguno de
+los dos diseños: dejarlas activas mete varianza no atribuible a ningún factor
+del barrido/Sobol. El NIVEL de CAPEX se sigue barriendo, vía el parámetro
+`capex_extra_pct` que multiplica `capex_inicial_ha` — ese sí es un input
+controlado del diseño y no cambia. De las dos alternativas que estaban
+planteadas (fijar los flags en `False`, o sumar `capex_riego_*_ha` /
+`capex_pozo_*_ha` / `opex_variacion_pct` como variables del barrido) se tomó
+la primera, más simple.
+
+**Regeneración desde cero, comparada contra las salidas anteriores** (motor en
+`4bbc634..3bac94e`, semillas sin cambios):
+
+| Salida | Resultado |
+|---|---|
+| `dataset_ml_train.parquet` (2400×19) / `_test.parquet` (600×19) | **byte-idénticos** a la versión commiteada (`DataFrame.equals` = True sobre las 3000 filas). `van_neto_medio_usd` y `prob_van_negativo` no se movieron ni un centésimo. Regeneración: train 529s + test 118s. |
+| `sobol_indices.parquet` (VAN medio) | **byte-idéntico** (max \|ΔS1\| = max \|ΔST\| = 0). Ranking ST (promedio entre escenarios) sin cambios: `tasa_descuento` (≈0,893) ≫ `hectareas` (0,076) > `capex_extra_pct` (0,038) > `p_bajo_si_alto` (0,005) ≫ `precision_factor_frio`/`_calor` (≈1e-7). |
+| `sobol_indices_riesgo.parquet` (`prob_van_negativo`) | **byte-idéntico**. Ranking ST sin cambios: `tasa_descuento` (≈0,934) ≫ `capex_extra_pct` (0,158) > `p_bajo_si_alto` (0,020) ≫ `precision_factor_frio`/`_calor` (≈3e-4 / 1e-4) > `hectareas` (0,000). |
+
+El resultado es idéntico —no "parecido"— porque el dataset y las corridas de
+Sobol anteriores (julio 2026) se generaron **antes** de que existieran
+`capex_opex_estocastico` y `correlacionar_frio_calor` (Fases 1-2), es decir, ya
+reflejaban el comportamiento `False` de ambos flags. Las ramas `False` del
+motor preservan exactamente el orden de consumo de `rng` previo a esas fases
+(verificado en la revisión de Fase 2), así que fijar los flags no altera
+ningún sorteo. El valor de este paso es dejar la elección **explícita en el
+código y documentada**, no un cambio numérico.
+
+**Modelos surrogate re-entrenados** (`src/entrenar_modelo.py` sobre el dataset
+regenerado; sin cambios de código, solo re-ejecución; R² en el test set, un
+diseño LHS independiente del de train):
+
+| Target | Random Forest R² | LightGBM R² |
+|---|---|---|
+| `van_neto_medio_usd` | 0,9861 | 0,9926 |
+| `prob_van_negativo` | 0,9913 | 0,9953 |
+
+Los cuatro siguen por encima de 0,98 (el umbral que ya se tenía). Como el
+dataset es idéntico y la semilla de entrenamiento es fija, estos R² coinciden
+con los de la corrida anterior — el re-entrenamiento confirma reproducibilidad,
+no aporta números nuevos.
+
+**El problema que esto cierra** (detectado por `/code-review ultra` el
+2026-08-26, sobre el commit que agregó `capex_opex_estocastico`):
+`evaluar_punto()` y `_evaluar_metrica()` armaban `ParametrosMC` sin pasar
+`capex_opex_estocastico`, heredando el default `True`: cada punto del barrido
+LHS / cada evaluación de Sobol arrastraba ruido de CAPEX/OPEX que no era
+feature de `ESPACIO_PARAMETROS` ni variable de `PROBLEMA_SOBOL`, contaminando
+`van_neto_medio_usd` / `prob_van_negativo` con varianza no atribuible a ningún
+input. Con `correlacionar_frio_calor` no había problema práctico (su default ya
+era `False`), pero se fijó explícito por el mismo criterio.
+
 ## Problemas abiertos
 
 ### Los parámetros clave no tienen soporte bibliográfico
@@ -421,31 +486,6 @@ Ver Paso 4 más abajo — reemplazar los supuestos ad hoc de frío/vecería por 
 ### Dataset sintético para ML pendiente
 
 Barrer el espacio de parámetros con `simulate_yields()` para generar un dataset sintético de entrenamiento (capa 3 de la arquitectura de datos del proyecto). Todavía no existe ningún archivo para esto en el repo.
-
-### `sensibilidad.py`/`dataset_ml.py` no controlan el nuevo CAPEX/OPEX estocástico
-
-Detectado por `/code-review ultra` el 2026-08-26, sobre el commit que agregó
-`capex_opex_estocastico` (ver la entrada "Resuelto" de esa fecha). Pendiente,
-sin resolver todavía:
-
-- `src/dataset_ml.py` (`evaluar_punto()`) arma `ParametrosMC` sin pasar
-  `capex_opex_estocastico`, así que hereda el default `True` en silencio:
-  cada punto del barrido LHS ahora tiene ruido de CAPEX/OPEX que no es una
-  feature de `ESPACIO_PARAMETROS` ni está controlado por `capex_extra_pct`
-  — contamina `van_neto_medio_usd`/`prob_van_negativo` con varianza no
-  atribuible a ningún input del dataset de entrenamiento del surrogate.
-- `src/sensibilidad.py` tiene el mismo problema: llama a
-  `run_monte_carlo_antitetico()` con `capex_opex_estocastico=True` por
-  default, así que los índices de Sobol absorben esa fuente de ruido, fuera
-  de `PROBLEMA_SOBOL`. Cualquier corrida de Sobol después de este cambio no
-  es directamente comparable con las corridas anteriores documentadas en
-  `notebooks/03_sensibilidad_sobol.ipynb` sin re-validar que el ruido nuevo
-  no mueve los índices de forma material.
-- Decisión pendiente para cuando se aborden estos dos archivos: o se agrega
-  `capex_opex_estocastico=False` explícito en ambos (para no contaminar
-  LHS/Sobol con una fuente no barrida), o se suman los parámetros nuevos
-  (`capex_riego_*_ha`, `capex_pozo_*_ha`, `opex_variacion_pct`) como
-  variables de entrada del barrido/Sobol. Ninguna de las dos está hecha.
 
 ### Deuda técnica menor en `src/costos.py`/`src/monte_carlo.py`
 

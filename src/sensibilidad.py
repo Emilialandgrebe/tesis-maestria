@@ -99,6 +99,14 @@ def _evaluar_metrica(
         p_bajo_si_alto=p_bajo_si_alto,
         escenario=escenario,
         semilla=semilla,
+        # Explícitas en False: Sobol descompone la varianza atribuible a las 6
+        # variables de PROBLEMA_SOBOL, no al ruido de CAPEX/OPEX estocástico ni
+        # a la correlación frío/calor (Fases 1-2 del motor), que no son
+        # variables analizadas acá. Sin esto se heredaría el default del motor
+        # (capex_opex_estocastico=True) y los índices S1/ST absorberían esa
+        # fuente de ruido no barrida, fuera del problema de Sobol.
+        capex_opex_estocastico=False,
+        correlacionar_frio_calor=False,
     )
     costos = ParametrosCostos(hectareas=hectareas)
     costos.capex_inicial_ha *= 1.0 + capex_extra_pct

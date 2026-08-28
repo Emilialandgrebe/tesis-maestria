@@ -137,6 +137,15 @@ def evaluar_punto(
         p_alto_si_bajo=fila["p_alto_si_bajo"],
         escenario=fila["escenario"],
         semilla=semilla,
+        # Ambas fuentes de ruido intra-simulación que agregaron las Fases 1-2
+        # del motor van EXPLÍCITAS en False: el barrido LHS mide sensibilidad a
+        # los parámetros de ESPACIO_PARAMETROS, no al ruido de CAPEX/OPEX
+        # estocástico ni a la correlación frío/calor, que no son inputs
+        # controlados de este diseño. Sin esto se heredaría en silencio el
+        # default del motor "oficial" (capex_opex_estocastico=True), metiendo
+        # una fuente de varianza no barrida en cada punto del dataset.
+        capex_opex_estocastico=False,
+        correlacionar_frio_calor=False,
     )
     costos = ParametrosCostos(hectareas=fila["hectareas"])
     costos.capex_inicial_ha *= 1.0 + fila["capex_extra_pct"]
