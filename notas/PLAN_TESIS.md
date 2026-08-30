@@ -514,6 +514,29 @@ son bugs, son limpieza pendiente):
   vez -- cualquier cambio futuro a ese caso especial requiere tocar las
   cuatro en simultáneo.
 
+### La interfaz Streamlit permite simular hasta 300 ha, fuera del rango barrido para ML/Sobol
+
+Anotado el 2026-08-30 (Fase 4, 2ª iteración). El slider de `hectareas` de
+`app.py` llega a 300 ha. El **motor** lo soporta sin problema: se verificó
+que `run_monte_carlo()` con `hectareas=300` corre sin error y que el VAN
+medio escala exactamente 6x respecto de 50 ha (CAPEX, OPEX e ingresos son
+lineales en superficie; `P(VAN<0)` y TIR quedan invariantes, como se
+espera). La simulación de la interfaz llama directo al motor, no al
+surrogate, así que esto es correcto.
+
+Lo que **no** cubre 300 ha:
+- `ESPACIO_PARAMETROS` en `src/dataset_ml.py`: `hectareas` en `(25.0, 100.0)`
+  — el dataset sintético de train/test y por lo tanto el modelo ML surrogate
+  sólo vieron hasta 100 ha.
+- `PROBLEMA_SOBOL` en `src/sensibilidad.py`: `hectareas` en `[50.0, 100.0]`
+  — los índices de `data/processed/sobol_indices.parquet` se calcularon en
+  ese rango.
+
+Si en algún momento se usa el modelo ML o se interpretan los índices de
+Sobol para escenarios de >100 ha, es **extrapolación fuera del rango de
+entrenamiento** y hay que decirlo explícito (o re-barrer con el piso/techo
+ampliado). No es urgente: hoy la interfaz sólo usa el motor.
+
 ---
 
 ## Plan de implementación
