@@ -537,6 +537,97 @@ Sobol para escenarios de >100 ha, es **extrapolación fuera del rango de
 entrenamiento** y hay que decirlo explícito (o re-barrer con el piso/techo
 ampliado). No es urgente: hoy la interfaz sólo usa el motor.
 
+### El motor escala TODO el CAPEX linealmente con hectáreas — probablemente incorrecto para varios ítems
+
+Anotado el 2026-08-30 (Fase 4, auditoría de CAPEX pedida por Emilia).
+**Hallazgo pendiente de resolver, NO verificado con datos reales del
+proyecto.** La clasificación de abajo es mi mejor juicio técnico/agronómico
+(Claude), no algo confirmado por Emilia ni por Facundo/Patricio. No se
+cambió código todavía.
+
+**Mecanismo actual (cómo `src/costos.py` llega a "USD/ha"):**
+
+1. `CAPEX_INICIAL_USD_HA = 45_160.52` es una **constante hardcodeada**, no
+   se lee `data/external/capex.csv` en runtime. El valor se calculó offline:
+   suma de los `total_usd` de las 16 filas con `costeado=SI` de `capex.csv`
+   = **USD 1.129.013,12**, dividida por **25 ha** (Fase I, la superficie que
+   `data/external/README.md` fija como base del dataset financiero).
+   1.129.013,12 / 25 = 45.160,52.
+2. `ParametrosCostos.capex_inicial_ha` toma esa constante como default
+   (src/costos.py:107).
+3. La propiedad `ParametrosCostos.capex_inicial` (src/costos.py:159) hace
+   `capex_inicial_ha * hectareas` — escala **lineal pura**, sin distinguir
+   ítem por ítem. Comentario en el código: `# escala lineal con hectareas`.
+4. `dataset_ml.py` y `sensibilidad.py` sólo multiplican `capex_inicial_ha`
+   por `(1 + capex_extra_pct)` — un recargo porcentual, no cambia el
+   supuesto de linealidad.
+
+Consecuencia: 50 ha → 300 ha da exactamente 6x en `capex_inicial`. Y ya al
+default de 50 ha, dividir por 25 la finca de 100 ha + la maquinaria "lumpy"
+infla el CAPEX/ha.
+
+**Clasificación tentativa de cada ítem de `capex.csv`** (`lineal` = crece
+~proporcional a la superficie; `fijo` = no depende [mucho] de la superficie;
+`escala` = crece con la superficie pero sub-proporcional / a saltos):
+
+| Ítem (categoría) | total_usd | costeado | Clasif. | Razonamiento (1 línea) |
+|---|---:|:---:|:---:|---|
+| Finca (TIERRA) | 600.000 | SI | **fijo** ⚠ | Los 100 ha ya están comprados (README pto. 2): para cualquier proyecto ≤100 ha el costo de tierra es hundido y fijo; además hoy se divide por 25 una línea cotizada sobre 100 ha → USD/ha de tierra x4. *Requiere confirmar si los 100 ha están efectivamente pagados.* |
+| Análisis de suelo (TIERRA) | 513,12 | SI | fijo | Un análisis compuesto de laboratorio cubre el campo; más ha suman algunos puntos de muestreo, no proporcional. |
+| Análisis de agua (TIERRA) | 0 | NO | fijo | Un análisis por fuente de agua (pozo), no por ha plantada. |
+| Desmonte / nivelación (TIERRA) | 0 | NO | lineal | Movimiento de suelo medido en USD/ha (la fuente usa `unidad=ha`); heterogeneidad del terreno agrega ruido. |
+| Subsolado profundo (TIERRA) | 0 | NO | lineal | Labor de tractor a 80 cm, costo ≈ horas/ha × tarifa (`unidad=ha`). |
+| Marcación (TIERRA) | 0 | NO | lineal | Marcar posiciones de planta escala con ha, pero la fuente dice que es inmaterial. |
+| Pozo de agua perforación x2 (RIEGO) | 0 | NO | **escala** ⚠ | La capacidad (L/s) de un pozo cubre un rango de ha; se agrega un 2º pozo recién al cruzar ese umbral (la fuente ya prevé 2). *Requiere el estudio hidrogeológico real para saber ha/pozo.* |
+| Bombas y tablero eléctrico x2 (RIEGO) | 0 | NO | escala ⚠ | Dimensionadas a la capacidad del pozo/bloque de riego; saltan con el nº de bombas. Atado al nº de pozos. |
+| Filtros y fertilizadores (RIEGO) | 0 | NO | escala ⚠ | Un cabezal de filtrado tiene caudal máximo que cubre un rango de ha; se suman equipos a saltos. Parte proporcional si se sobredimensiona el cabezal. |
+| Tuberías + laterales + goteros (RIEGO) | 0 | NO | lineal | Longitud de tubería y nº de goteros ≈ proporcionales a superficie y nº de plantas (`unidad=ha`, 2 goteros/planta); las primarias tienen leve economía de escala. |
+| Represa / cisterna 5.000 m³ (RIEGO) | 0 | NO | escala ⚠ | El volumen necesario crece con ha, pero la obra civil de un reservorio escala sub-lineal (USD/m³ baja con el tamaño). *Sin fuente de precio.* |
+| Plantas hembra Kerman (PLANTAS) | 310.500 | SI | **lineal** | Densidad de plantación (plantas/ha) fija → nº de plantas y costo proporcionales a la superficie. |
+| Plantas macho Peters/Randy (PLANTAS) | 27.000 | SI | **lineal** | Proporción de polinizadores (~8-10 % de hembras) fija → escala con ha. |
+| Tutores caña/fibra (PLANTAS) | 7.500 | SI | lineal | Un tutor por árbol joven → escala con el nº de plantas / ha. |
+| Tractor 90 HP (MAQUINARIA) | 55.000 | SI | **fijo** en el rango ⚠ | Un tractor cubre ~100-150 ha de tareas de monte; recién se compra un 2º al superar su capacidad de trabajo. En 25-100 ha, 1 unidad. |
+| Pulverizadora turbina 1000 L (MAQUINARIA) | 12.000 | SI | fijo en el rango ⚠ | Cubre muchas ha por ventana de pulverización; 2ª unidad sólo a gran escala. |
+| Subsolador 3 cuerpos (MAQUINARIA) | 4.000 | SI | fijo | Un implemento sirve a toda la operación dentro de un rango amplio. |
+| Rastra 16 discos (MAQUINARIA) | 3.800 | SI | fijo | Ídem: implemento único. |
+| Desmalezadora 1.5 m (MAQUINARIA) | 4.200 | SI | fijo | Ídem: implemento único; quizá 2º a gran escala. |
+| Arado de discos (MAQUINARIA) | 3.500 | SI | fijo | Ídem: implemento único. |
+| Paneles solares (INFRA) | 0 | NO | escala ⚠ | kW instalados ≈ demanda de bombeo ≈ ha regadas → casi lineal, con economía de escala en instalación. *La familia lo está cotizando.* |
+| Galpón herramientas 200 m² (INFRA) | 50.000 | SI | escala ⚠ | 200 m² sirven a un rango de ha; a más escala el área crece sub-proporcional y el USD/m² es ~plano. En 25-100 ha, 1 galpón. |
+| Sistema eléctrico finca (INFRA) | 15.000 | SI | fijo en el rango ⚠ | El costo de la línea trifásica depende sobre todo de la distancia a la red, no de las ha; los tableros escalan algo con la carga. |
+| Camino interno ripio 3 km (INFRA) | 12.000 | SI | escala | La longitud de caminos crece con el área como ~√área (se atraviesa el predio), no lineal. |
+| Alambrado perimetral 8 km (INFRA) | 12.000 | SI | **escala** | El perímetro escala como ~√área: duplicar la superficie → perímetro ×1,41, no ×2. Sub-lineal clásico. |
+| Red antigranizo (INFRA) | 0 | NO | lineal | Malla + postes son estructura por ha (`unidad=ha`). Opcional. |
+| Oficina/vivienda encargado (INFRA) | 12.000 | SI | fijo | Un módulo prefabricado independiente de las ha en el rango; quizá 2ª vivienda a muy gran escala. |
+| Software de gestión agrícola (TECNOLOGIA) | 0 | NO | fijo ⚠ | Licencia por finca/usuario, no por ha (algunos SaaS cobran por ha). "No indispensable". |
+| Estación meteorológica (TECNOLOGIA) | 0 | NO | fijo | Una estación cubre la finca / microclima; 2ª sólo para sitios muy grandes o heterogéneos. |
+| Sitio web e-commerce (TECNOLOGIA) | 0 | NO | fijo | Totalmente independiente de las ha; "se haría internamente". |
+
+**Peso de cada clase dentro de los USD 1.129.013 costeados (los que hoy escalan lineal):**
+
+| Clase | Ítems | USD | % del CAPEX costeado |
+|---|---|---:|---:|
+| Genuinamente lineal | plantas hembra + macho + tutores | 345.000 | ~30,6 % |
+| Tierra (fijo/hundido para ≤100 ha, hoy mal basado a /25) | finca | 600.000 | ~53,1 % |
+| Fijo / "lumpy" (maquinaria + edificios) | tractor, pulverizadora, 4 implementos, análisis suelo, sist. eléctrico, oficina | 110.013 | ~9,7 % |
+| Economía de escala | galpón | 50.000 | ~4,4 % |
+| Sub-lineal (~√área) | camino interno + alambrado | 24.000 | ~2,1 % |
+
+Es decir: **sólo ~31 % del CAPEX costeado es realmente lineal con la
+superficie.** El ~53 % es tierra (probablemente fija en el rango de ha del
+proyecto) y el ~16 % restante es fijo/lumpy o sub-lineal. Escalar el total
+×6 de 50 a 300 ha sobreestima fuerte el CAPEX a gran escala; y dividir por
+25 la finca de 100 ha + la maquinaria lumpy ya sobreestima el CAPEX/ha al
+default de 50 ha. Por debajo de 25 ha, la linealidad subestima (los costos
+fijos no se achican).
+
+**Qué haría falta para resolverlo (no hacerlo ahora, esperar decisión de Emilia):**
+separar `capex.csv` en un componente fijo (USD absolutos, no USD/ha), uno
+lineal (USD/ha × ha) y uno con función de escala (p. ej. escalones para
+pozos/tractor, √área para perímetro), y decidir con Facundo/Patricio los
+umbrales reales (ha por pozo, ha por tractor, si los 100 ha ya están
+pagados). Mientras tanto, la simulación a ≠25 ha arrastra este sesgo.
+
 ---
 
 ## Plan de implementación
