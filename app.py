@@ -169,8 +169,15 @@ with st.sidebar:
     )
 
     capex_opex_estocastico = st.checkbox(
-        "CAPEX/OPEX estocástico", value=True,
-        help="Variabilidad de riego, pozo y multiplicador de OPEX. Default del motor oficial: activado.",
+        "OPEX estocástico", value=True,
+        help=(
+            "Multiplicador de OPEX (±15% triangular). Default del motor "
+            "oficial: activado. El nombre del parámetro sigue siendo "
+            "`capex_opex_estocastico` en el motor por compatibilidad, pero "
+            "desde la resincronización del CAPEX (Fase B) ya no agrega "
+            "variabilidad de riego/pozo -- esos ítems tienen precio fijo "
+            "real confirmado, ver notas/PLAN_TESIS.md."
+        ),
     )
 
     correlacionar_frio_calor = st.checkbox(
@@ -354,7 +361,7 @@ with tab_cmp:
     st.caption(
         f"Los tres escenarios de precio a los parámetros actuales del sidebar "
         f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
-        f"CAPEX/OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
+        f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
         f"modelo de precio {'AR(1)' if modo_precio == 'ar1' else 'triangular'}, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )

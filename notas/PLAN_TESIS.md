@@ -546,7 +546,204 @@ sigue en AR(1) sin cambios (vía el alias). Falta como próximo paso (ver
 Sobol/dataset/modelos si corresponde, una vez que Emilia dé el visto bueno
 a este cambio en el motor.
 
+### Fase B: CAPEX resincronizado con el plan de negocio 120 ha — VAN/P(VAN<0) provisorios, faltan antigranizo y paneles
+
+Resuelto (parcialmente) el 2026-09-24. Emilia pasó datos confirmados del
+plan de negocio vigente, base **120 ha** (reemplaza la base de 25 ha de
+`data/external/capex.csv` usada hasta acá), dejando explícitamente **sin
+cotizar** dos ítems que todavía no están confirmados: Red antigranizo y
+Paneles solares. Ver "Problemas abiertos" (entrada nueva, arriba de todo)
+para la consecuencia más importante de esto: **el VAN/P(VAN<0) de esta
+fase NO son el número final para citarle a Eze.**
+
+**`data/external/capex.csv` reescrito completo** (34 filas, ver el archivo).
+Suma total: **USD 1.249.082,14** (25 de 34 ítems con `costeado=SI`; los
+otros 9 siguen sin cotizar, en USD 0: Subsolado profundo, Filtros y
+fertilizadores, Tuberías, Represa/cisterna, Paneles solares, Red
+antigranizo, y los 3 ítems de TECNOLOGIA -- Software de gestión agrícola,
+Estación meteorológica, Sitio web -- que ya estaban sin cotizar desde antes
+y no se tocaron en esta fase). Por categoría:
+
+| Categoría | Subtotal (USD) |
+|---|---:|
+| TIERRA | 534.713,12 |
+| RIEGO | 98.000,00 |
+| PLANTAS | 405.000,00 |
+| MAQUINARIA | 66.500,00 |
+| INFRAESTRUCTURA | 101.000,00 |
+| ADMINISTRATIVOS (categoría nueva) | 40.228,76 |
+| SOCIETARIOS (categoría nueva, consolida la lista larga anterior) | 3.640,26 |
+| TECNOLOGIA (sin cambios, todo sin cotizar) | 0,00 |
+
+Verificado con el usuario ANTES de escribir el archivo: mi primera suma
+(USD 1.249.082,14) no coincidía con la expectativa mental de Emilia
+(~USD 233.000) — se confirmó por chat que el cálculo correcto es el mío
+(la estimación de 233.000 era mental, no un número ya calculado) antes de
+proceder. No se inventó ningún monto para los ítems sin cotizar.
+
+**`CAPEX_INICIAL_USD_HA` recalculado** (`src/costos.py`): USD 1.249.082,14
+/ 120 ha = **USD 10.409,02/ha** (antes: USD 45.160,52/ha, sobre base 25 ha).
+La caída por hectárea es real y se explica por varios factores combinados,
+no solo la superficie: precio de tierra más bajo (USD 3.500/ha vs. 6.000
+antes), y sobre todo la densidad de plantación mucho más realista (ver
+abajo) — antes el costo de plantas por sí solo eran USD 13.500/ha (a 1.500
+plantas/ha), ahora son USD 3.375/ha (a 375 plantas/ha). El comentario en el
+código deja explícito que **este número VA A SUBIR** cuando se confirmen
+antigranizo y paneles.
+
+**CAPEX estocástico (Fase 1, `CAPEX_RIEGO_*`/`CAPEX_POZO_*`) retirado por
+completo** — decisión tomada con Emilia por chat antes de tocar código.
+Pozo de agua (18.000) y Bombas y tablero eléctrico (80.000) ahora tienen
+precio FIJO real confirmado, ya adentro de `capex_inicial` — dejar esas
+triangulares activas hubiera duplicado ese costo. Se retiró también
+`CAPEX_RIEGO_*` (no solo pozo): esa triangular vieja (USD 70.000-87.500 a
+25 ha) era un estimado de mercado para "tuberías+goteros+filtros+
+fertirriego+**bombeo**" combinado, sin desagregar — como bombeo ya tiene
+precio fijo aparte, dejar el rango viejo intacto hubiera dejado un doble
+conteo parcial. `simulate_capex_extra()`/`simulate_capex_extra_antitetico()`
+en `src/monte_carlo.py` devuelven cero incondicionalmente ahora (se
+mantienen las funciones, no se eliminan, para no romper la firma de
+`run_monte_carlo()` ni la columna `capex_extra_estocastico_usd`).
+**Confirmación explícita pedida por Emilia: el componente estocástico de
+CAPEX queda VACÍO** — lo único que sigue variando entre simulaciones (con
+`capex_opex_estocastico=True`, el default) es el multiplicador de OPEX
+(`OPEX_VARIACION_PCT = 0.15`). Pendiente para más adelante: cotización de
+tuberías/filtros/fertirriego que excluya explícitamente el bombeo, para
+eventualmente reintroducir estocasticidad ahí.
+
+**Con la misma semilla, los resultados ya NO son comparables con los de
+antes de este commit.** Además del cambio de CAPEX en sí,
+`simulate_capex_extra()`/`simulate_capex_extra_antitetico()` dejaron de
+consumir números del `rng` (antes sorteaban las triangulares de riego y pozo;
+ahora devuelven ceros sin tocarlo). Todo lo que se sortea después en
+`run_monte_carlo()`/`run_monte_carlo_antitetico()` (el multiplicador de OPEX)
+sale de otra parte del stream, así que `semilla=42` hoy no reproduce ninguna
+corrida guardada de antes de Fase B -- ni siquiera aislando el efecto del
+CAPEX. Cualquier comparación antes/después tiene que re-correr ambos lados
+con el código actual (como la tabla de abajo) y no contra outputs viejos.
+
+**`CAPEX_INICIAL_USD_HA` guardado como cociente exacto** (`1_249_082.14 /
+120` = 10.409,0178…), no redondeado a 10_409.02: con el valor redondeado,
+120 ha reconstruían USD 1.249.082,40 (USD 0,26 de más respecto del CSV).
+Verificado que `CAPEX_INICIAL_USD_HA * 120 == 1_249_082.14` en float. La
+fila de Pozo de agua de `capex.csv` quedó con `cantidad=1`,
+`precio_unit_usd=18000` (monto global confirmado, sin desglose por
+perforación) para que cantidad × precio = total como en el resto de las
+filas. Detectado en revisión manual del commit (el informe del
+`/code-review ultra` de Fase B no se pudo recuperar).
+
+**Densidad de plantación verificada**: (41.400 hembra + 3.600 macho) / 120
+ha = **375 plantas/ha** (spacing implícito ~5,16 m × 5,16 m). Dentro del
+rango típico de plantaciones modernas de pistacho de alta densidad
+(literatura agronómica: ~200-400 plantas/ha según sistema de conducción;
+huertos tradicionales más bajos, sistemas súper-intensivos más altos). Es
+una mejora fuerte respecto de la base vieja de 25 ha, que implicaba ~1.500
+plantas/ha (spacing ~2,58 m × 2,58 m) — una densidad implausible para un
+árbol de la copa que alcanza el pistacho, ya señalada como sospechosa en
+"Problemas abiertos" (sección de parámetros sin soporte bibliográfico). La
+proporción macho:hembra se mantiene en ~8,7% (3.600/41.400), consistente
+con el ~8-10% de polinizadores ya documentado.
+
+**Comparación antes/después** (120 ha, 10.000 simulaciones, escenario
+base, `modo_precio="ar1"`, semilla 42, `capex_opex_estocastico=True`
+default; "antes" usa el `CAPEX_INICIAL_USD_HA` viejo pero SIN el
+mecanismo de CAPEX estocástico riego/pozo, que ya está retirado del código
+-- la comparación aísla el efecto del recálculo de CAPEX fijo, no el del
+retiro del estocástico, que es una fuente de variabilidad mucho más chica
+en comparación):
+
+| | CAPEX_INICIAL_USD_HA | CAPEX inicial total (120ha) | VAN medio | P(VAN<0) |
+|---|---:|---:|---:|---:|
+| ANTES | USD 45.160,52 | USD 5.419.262 | USD 5.951.174 | 16,42% |
+| DESPUÉS | USD 10.409,02 | USD 1.249.082 | USD 10.121.354 | 1,14% |
+
+El VAN medio sube ~USD 4,17M y `P(VAN<0)` cae ~15,3 puntos porcentuales —
+un movimiento fuerte, como se esperaba, porque el CAPEX fijo bajó a menos
+de un cuarto. **Este resultado es PROVISORIO**: el CAPEX todavía no incluye
+antigranizo ni paneles solares (ver "Problemas abiertos"), así que
+`P(VAN<0)=1,14%` está subestimado y no debe citarse como número final.
+
+**Quedó pendiente, sin tocar en esta fase** (instrucción explícita: no
+tocar `sensibilidad.py` ni `dataset_ml.py` todavía):
+- `data/processed/dataset_ml_{train,test}.parquet` y
+  `sobol_indices*.parquet` se generaron con el `CAPEX_INICIAL_USD_HA` viejo
+  (45.160,52/ha, base 25 ha) y con el mecanismo de CAPEX estocástico
+  riego/pozo que ya no existe en el código — están **desactualizados**
+  respecto al `capex.csv`/`costos.py` de esta fase. No se regeneraron.
+- `data/external/README.md` sigue diciendo "Superficie base: 25 ha" y
+  "Total de CAPEX de referencia: USD 1.129.013,12" en su sección
+  "Decisiones ya tomadas" — ambas ahora obsoletas, no se actualizó ese
+  archivo en esta fase (no estaba en el alcance pedido).
+- La auditoría de linealidad de CAPEX vs. hectáreas ("Problemas abiertos",
+  entrada de 2026-08-30) quedó con una nota de que está desactualizada,
+  sin rehacerla -- pero vale anotar que el problema de fondo que esa
+  auditoría describe se agravó, no se resolvió: las dos categorías nuevas
+  (ADMINISTRATIVOS: Acta de Constatación + Rodados; SOCIETARIOS:
+  constitución de la SAS + gastos notariales, USD 43.869,02 combinados) son
+  costos de una sola vez, evidentemente NO proporcionales a la superficie
+  (constituir la SAS no cuesta más en una finca de 120 ha que en una de
+  25), y quedaron adentro del mismo `CAPEX_INICIAL_USD_HA` que escala
+  linealmente con `hectareas` -- por diseño de `ParametrosCostos`
+  (`hectareas: float = 50.0` sigue siendo el default, sin relación con la
+  base de 120 ha usada para calibrar el CSV). A `hectareas=50` (el default
+  del motor), esos costos de una sola vez se subestiman a menos de la
+  mitad de su valor real; a `hectareas=300` se sextuplican sin sentido.
+  Detectado por `/code-review ultra`, no corregido en esta fase (requiere
+  la misma separación fijo/lineal/escala que ya pide la auditoría vieja).
+- `data/external/capex_estimaciones_web.csv` quedó huérfano: ya no lo
+  consume ningún código (era la fuente de `CAPEX_RIEGO_*`/`CAPEX_POZO_*`,
+  ambos retirados). Sigue siendo útil como referencia histórica (documentado
+  en `data/external/README.md`), no se borró.
+
 ## Problemas abiertos
+
+### ⚠️ EL CAPEX ESTÁ INCOMPLETO — faltan Red antigranizo y Paneles solares — el VAN/P(VAN<0) actuales NO son el número final
+
+Vigente desde 2026-09-24 (Fase B, resincronización del CAPEX a 120 ha —
+ver "Resuelto" más arriba para el detalle completo). Dos ítems de
+`data/external/capex.csv` siguen **sin cotizar a propósito** (`costeado=NO`,
+`total_usd=0`), porque todavía no están confirmados:
+
+- **Red antigranizo**: se mencionó informalmente un monto de USD 16.400,
+  pero sin confirmar con proveedor. No incluido.
+- **Paneles solares**: la familia lo está cotizando activamente. No
+  incluido.
+
+Mientras estos dos ítems sigan en 0, `CAPEX_INICIAL_USD_HA`
+(USD 10.409,02/ha) está **subestimado** y **VA A SUBIR** cuando se
+confirmen. Cualquier VAN medio, `P(VAN<0)` o TIR que salga del motor HOY
+(incluida la comparación antes/después de la entrada "Resuelto" de esta
+misma fase: VAN medio USD 10.121.354, `P(VAN<0)`=1,14% a 120 ha) es
+**PROVISORIO** — no citarlo como el resultado final del proyecto ante Eze
+ni en la tesis hasta que estos dos ítems tengan cotización real y el motor
+se vuelva a correr con el CAPEX completo.
+
+### Barridos de ML/Sobol y defaults de superficie sin alinear con el CAPEX de Fase B (120 ha)
+
+Anotado el 2026-09-28, en la revisión manual del commit de Fase B. No
+rompe nada hoy (`dataset_ml.py` y `sensibilidad.py` corren sin error con el
+CAPEX nuevo, verificado con N chico), pero hay que resolverlo **antes** de
+regenerar dataset/Sobol/modelos:
+
+- **El rango de `capex_extra_pct` ([0%, 30%]) está calibrado para el CAPEX
+  viejo** (`ESPACIO_PARAMETROS` en `src/dataset_ml.py`, `PROBLEMA_SOBOL` en
+  `src/sensibilidad.py`). Se pensó como recargo por los ítems sin cotizar
+  de entonces (riego, pozo, represa, paneles) sobre USD 45.160,52/ha. Ahora
+  se aplica sobre USD 10.409,02/ha y lo sin cotizar es otro conjunto (red
+  antigranizo, paneles, tuberías/filtros, represa, subsolado, tecnología).
+  Como orden de magnitud, la triangular vieja de riego sola equivalía a
+  ~2.800-3.500 USD/ha, es decir ~27-34% de la base nueva: el techo de 30%
+  podría quedar corto. Revisarlo cuando se confirmen antigranizo y paneles.
+- **Los rangos de hectáreas no cubren las 120 ha del plan**: `hectareas`
+  en `(25, 100)` en `dataset_ml.py` y `[50, 100]` en Sobol. Cualquier uso
+  del surrogate o de los índices de Sobol a 120 ha es extrapolación (ver
+  también la entrada del slider de 300 ha más abajo).
+- **Los defaults de hectáreas siguen en 50**, sin alinear con la base de
+  120 ha: `ParametrosCostos.hectareas`, `HECTAREAS` en
+  `src/monte_carlo.py` (default de `ParametrosMC.hectareas`) y el `value`
+  del slider en `app.py`. Además de lo obvio (el default no es el
+  proyecto), agrava el problema de los costos de una sola vez escalados
+  linealmente (ver "Quedó pendiente" en la entrada de Fase B).
 
 ### `st.markdown` rompe el formato de P10/P50/P90 cuando P10 es negativo (app.py)
 
@@ -772,6 +969,16 @@ como delimitador de LaTeX y rompe el formato. Es un bug preexistente
 P10 da negativo más seguido.
 
 ### El motor escala TODO el CAPEX linealmente con hectáreas — probablemente incorrecto para varios ítems
+
+**Nota 2026-09-24 (Fase B):** `capex.csv` y `CAPEX_INICIAL_USD_HA` se
+resincronizaron con el plan de negocio 120 ha (ver "Resuelto" más abajo en
+esta misma sección) — los montos e ítems de la tabla de abajo (base 25 ha,
+total USD 1.129.013) están **desactualizados**. El diagnóstico de fondo
+(qué ítems son fijos/lineales/sub-lineales) probablemente sigue siendo
+válido conceptualmente, pero los números y hasta la clasificación de Pozo
+de agua/Bombas cambiaron (ahora tienen precio fijo real, ya no son
+`costeado=NO`). Releer esta auditoría contra el `capex.csv` nuevo antes de
+citar cualquier número de acá.
 
 Anotado el 2026-08-30 (Fase 4, auditoría de CAPEX pedida por Emilia).
 **Hallazgo pendiente de resolver, NO verificado con datos reales del

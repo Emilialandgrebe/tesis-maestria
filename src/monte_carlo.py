@@ -382,11 +382,12 @@ class ParametrosMC:
     # ningún caller.
     modo_precio: Literal["ar1", "triangular"] = "ar1"
 
-    # Activa la variabilidad estocástica de CAPEX/OPEX (riego, pozo,
-    # multiplicador de OPEX -- ver simulate_capex_extra()/
-    # simulate_opex_multiplicador() más abajo). En False, capex_extra=0 y
-    # opex_multiplicador=1.0 para las 10.000 iteraciones (equivalente al
-    # comportamiento previo a esa fuente de variabilidad), sin invocar
+    # Activa la variabilidad estocástica de OPEX (multiplicador de OPEX --
+    # ver simulate_opex_multiplicador() más abajo). El nombre conserva
+    # "capex" por compatibilidad: desde Fase B el componente de CAPEX
+    # (riego/pozo, simulate_capex_extra()) está retirado y devuelve cero
+    # con o sin este flag -- ver src/costos.py. En False,
+    # opex_multiplicador=1.0 para las 10.000 iteraciones, sin invocar
     # rng.triangular -- para comparar contra el modelo determinístico sin
     # recurrir a anchos "casi cero" que rng.triangular no acepta.
     capex_opex_estocastico: bool = True
@@ -738,17 +739,19 @@ def simulate_revenue(
 
 
 # ---------------------------------------------------------------------------
-# CAPEX/OPEX estocásticos dentro de la simulación (PLAN_TESIS.md, 2026-08-26)
+# CAPEX/OPEX estocásticos dentro de la simulación (PLAN_TESIS.md, 2026-08-26;
+# componente de CAPEX retirado en Fase B, 2026-09-24 -- ver src/costos.py)
 #
 # Hasta acá, `src/costos.py` era 100% determinístico dentro de una corrida de
 # Monte Carlo: el único lugar donde CAPEX/OPEX variaban era el barrido LHS de
 # `dataset_ml.py` (`capex_extra_pct`), como parámetro FIJO por punto del
 # diseño, no como ruido dentro de las 10.000 iteraciones que arman la
-# distribución del VAN. Estas cuatro funciones agregan esa fuente de
-# variabilidad, con el mismo criterio de "no asumir distribuciones sin mirar
-# los datos" que ya usa el resto del módulo: ver los docstrings de las
-# constantes CAPEX_RIEGO_*/CAPEX_POZO_*/OPEX_VARIACION_PCT en src/costos.py
-# para la justificación de cada rango (o la falta de uno).
+# distribución del VAN. Estas cuatro funciones agregaron esa fuente de
+# variabilidad -- desde Fase B, las dos de CAPEX (`simulate_capex_extra*`)
+# quedaron retiradas (devuelven cero incondicionalmente: riego y pozo ya
+# tienen precio fijo real, ver src/costos.py), y solo las dos de OPEX
+# (`simulate_opex_multiplicador*`) siguen agregando variabilidad real, según
+# `OPEX_VARIACION_PCT` en src/costos.py.
 # ---------------------------------------------------------------------------
 
 def _triangular_o_constante(
@@ -786,44 +789,28 @@ def simulate_capex_extra(
     estocastico: bool = True,
 ) -> np.ndarray:
     """
-    CAPEX estocástico adicional (riego + pozo de agua), en USD, YA escalado
-    por `costos.hectareas`. Se suma a `costos.capex_inicial` (el componente
-    FIJO, ítems con cotización real) para obtener el CAPEX total de cada
-    simulación -- ver `_orquestar_resultado()`.
+    CAPEX estocástico adicional, en USD -- RETIRADO desde Fase B
+    (notas/PLAN_TESIS.md, 2026-09-24): devuelve cero incondicionalmente.
 
-    Un solo draw por simulación (no por año: el CAPEX ocurre una vez, al
-    inicio del proyecto). Riego y pozo se muestrean como dos triangulares
-    INDEPENDIENTES y se suman ítem por ítem, en vez de aproximar la suma con
-    una triangular equivalente por momentos: es más simple de mantener (dos
-    `rng.triangular()` en vez de resolver los momentos de una suma de
-    triangulares) y no introduce el error de encajar esa suma en una forma
-    triangular que no le corresponde exactamente. Se asume independencia
-    entre riego y pozo a falta de datos que sugieran correlación.
+    Hasta la resincronización con el plan de negocio 120 ha, acá se
+    muestreaban dos triangulares (riego, pozo de agua) calibradas con
+    estimaciones de mercado -- ver `src/costos.py`, sección "CAPEX
+    estocástico: RETIRADO", para el detalle de por qué: pozo y bombas ahora
+    tienen precio FIJO real confirmado en `costos.capex_inicial_ha`, así que
+    seguir simulándolos duplicaría ese costo. No queda ningún ítem de CAPEX
+    sin cotizar con rango de mercado hoy.
 
-    Parámetros
-    ----------
-    estocastico : bool
-        Si es False (`ParametrosMC.capex_opex_estocastico=False`), devuelve
-        directamente ceros para las `n_simulaciones` iteraciones, sin llamar
-        a `rng.triangular` -- para comparar contra el modelo determinístico
-        sin depender de un ancho "casi cero".
+    Se mantienen la función y su firma (`costos`, `rng`, `estocastico` sin
+    usar a propósito) en vez de eliminarla, para no romper
+    `run_monte_carlo()`/`_orquestar_resultado()` ni la columna
+    `capex_extra_estocastico_usd` -- ver `simulate_capex_extra_antitetico()`,
+    idéntico criterio.
 
     Retorna
     -------
-    np.ndarray de forma (n_simulaciones,), en USD.
+    np.ndarray de forma (n_simulaciones,), en USD -- siempre ceros.
     """
-    if not estocastico:
-        return np.zeros(n_simulaciones)
-
-    riego_ha = _triangular_o_constante(
-        rng, costos.capex_riego_low_ha, costos.capex_riego_mode_ha,
-        costos.capex_riego_high_ha, n_simulaciones,
-    )
-    pozo_ha = _triangular_o_constante(
-        rng, costos.capex_pozo_low_ha, costos.capex_pozo_mode_ha,
-        costos.capex_pozo_high_ha, n_simulaciones,
-    )
-    return (riego_ha + pozo_ha) * costos.hectareas
+    return np.zeros(n_simulaciones)
 
 
 def simulate_capex_extra_antitetico(
@@ -833,33 +820,16 @@ def simulate_capex_extra_antitetico(
     estocastico: bool = True,
 ) -> np.ndarray:
     """
-    Versión de `simulate_capex_extra()` con reducción de varianza por
-    variables antitéticas: cada triangular (riego, pozo) se arma
-    transformando uniformes antitéticos (`_generar_uniformes_antiteticos`)
-    vía la PPF de `scipy.stats.triang`, mismo patrón que
-    `simulate_prices_antitetico()`. Ver `simulate_capex_extra()` para el
-    significado de `estocastico`.
+    Versión "antitética" de `simulate_capex_extra()` -- también RETIRADO,
+    también devuelve cero incondicionalmente. Ver esa función para el
+    detalle; se mantiene como función separada solo para preservar la
+    interfaz de `run_monte_carlo_antitetico()`.
 
     Retorna
     -------
-    np.ndarray de forma (n_simulaciones,), en USD.
+    np.ndarray de forma (n_simulaciones,), en USD -- siempre ceros.
     """
-    if not estocastico:
-        return np.zeros(n_simulaciones)
-
-    u_riego = _generar_uniformes_antiteticos(n_simulaciones, (1,), rng).ravel()
-    riego_ha = _triangular_ppf_o_constante(
-        u_riego, costos.capex_riego_low_ha, costos.capex_riego_mode_ha,
-        costos.capex_riego_high_ha,
-    )
-
-    u_pozo = _generar_uniformes_antiteticos(n_simulaciones, (1,), rng).ravel()
-    pozo_ha = _triangular_ppf_o_constante(
-        u_pozo, costos.capex_pozo_low_ha, costos.capex_pozo_mode_ha,
-        costos.capex_pozo_high_ha,
-    )
-
-    return (riego_ha + pozo_ha) * costos.hectareas
+    return np.zeros(n_simulaciones)
 
 
 def simulate_opex_multiplicador(
@@ -953,9 +923,10 @@ def _orquestar_resultado(
     Parámetros
     ----------
     capex_extra_usd : np.ndarray
-        Forma (n_simulaciones,). CAPEX estocástico adicional (riego + pozo),
-        ver `simulate_capex_extra()`. Se SUMA a `costos.capex_inicial` (el
-        componente fijo) para obtener el CAPEX total de cada simulación.
+        Forma (n_simulaciones,). CAPEX estocástico adicional -- siempre cero
+        desde Fase B, ver `simulate_capex_extra()`. Se SUMA a
+        `costos.capex_inicial` (el componente fijo) para obtener el CAPEX
+        total de cada simulación (sin efecto numérico mientras sea cero).
     opex_multiplicador : np.ndarray
         Forma (n_simulaciones,). Ver `simulate_opex_multiplicador()`.
     """
@@ -999,11 +970,11 @@ def run_monte_carlo(
     Orquesta la simulación completa y retorna los resultados en formato tabular.
 
     El VAN se calcula sobre el flujo de caja neto (ingresos - OPEX), no sobre
-    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0),
-    e incluye tanto el componente fijo (`costos.capex_inicial`) como el
-    estocástico (riego + pozo, `simulate_capex_extra()`). El OPEX de cada año
-    se escala por un multiplicador estocástico único por simulación
-    (`simulate_opex_multiplicador()`).
+    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0):
+    solo el componente fijo (`costos.capex_inicial`) tiene efecto -- el
+    estocástico (`simulate_capex_extra()`) devuelve cero desde Fase B, ver
+    src/costos.py. El OPEX de cada año se escala por un multiplicador
+    estocástico único por simulación (`simulate_opex_multiplicador()`).
 
     El precio se genera según `params.modo_precio` ("ar1", default, o
     "triangular") -- ver `_despachar_precios()`.
@@ -1146,9 +1117,9 @@ def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFra
         usado para generar `df` en `run_monte_carlo()`. Es obligatorio y sin
         default a propósito: un default silencioso acá (p. ej. hectareas=50)
         daría un CAPEX incorrecto si `df` se generó con otra superficie. El
-        componente ESTOCÁSTICO del CAPEX (riego + pozo) no está en `costos`
-        -- varía por simulación -- así que se toma de la columna
-        `capex_extra_estocastico_usd` de `df`, no de `costos`.
+        componente ESTOCÁSTICO del CAPEX no está en `costos` -- varía por
+        simulación, aunque desde Fase B sea siempre cero -- así que se toma
+        de la columna `capex_extra_estocastico_usd` de `df`, no de `costos`.
 
     Retorna
     -------
