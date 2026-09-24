@@ -688,6 +688,66 @@ semilla compartida, así que `capex_extra_pct` queda con menos varianza
 residual para explicar. `precision_factor_frio`/`_calor` siguen en ~0 en
 ambas corridas (correcto: no mueven la media por construcción).
 
+**Desagregado por escenario de precio** (las tablas de arriba son el
+promedio entre los tres; esta es la comparación completa, `S1`/`ST`, viejo
+triangular vs. nuevo AR(1) -- `precision_factor_frio`/`_calor` ~0 en los
+seis casos, omitidas):
+
+*`van_neto_medio_usd`:*
+
+| Escenario | Parámetro | S1 viejo (tri) | ST viejo (tri) | S1 nuevo (AR1) | ST nuevo (AR1) |
+|---|---|---:|---:|---:|---:|
+| pesimista | tasa_descuento | 0,8710 | 0,8986 | 0,9003 | 0,9342 |
+| pesimista | capex_extra_pct | 0,0662 | 0,0692 | 0,0471 | 0,0461 |
+| pesimista | hectareas | 0,0215 | 0,0505 | 0,0090 | 0,0317 |
+| pesimista | p_bajo_si_alto | 0,0075 | 0,0063 | 0,0064 | 0,0057 |
+| base | tasa_descuento | 0,8845 | 0,9223 | 0,8560 | 0,8958 |
+| base | hectareas | 0,0361 | 0,0528 | 0,0741 | 0,0863 |
+| base | capex_extra_pct | 0,0338 | 0,0307 | 0,0235 | 0,0197 |
+| base | p_bajo_si_alto | 0,0054 | 0,0051 | 0,0045 | 0,0045 |
+| optimista | tasa_descuento | 0,8187 | 0,8592 | 0,7858 | 0,8267 |
+| optimista | hectareas | 0,1168 | 0,1256 | 0,1548 | 0,1608 |
+| optimista | capex_extra_pct | 0,0174 | 0,0135 | 0,0121 | 0,0085 |
+| optimista | p_bajo_si_alto | 0,0040 | 0,0041 | 0,0033 | 0,0036 |
+
+*`prob_van_negativo`:*
+
+| Escenario | Parámetro | S1 viejo (tri) | ST viejo (tri) | S1 nuevo (AR1) | ST nuevo (AR1) |
+|---|---|---:|---:|---:|---:|
+| pesimista | tasa_descuento | 0,9393 | 0,9588 | 0,9523 | 0,9418 |
+| pesimista | capex_extra_pct | 0,0205 | 0,0605 | 0,0524 | 0,0503 |
+| pesimista | p_bajo_si_alto | 0,0049 | 0,0079 | 0,0079 | 0,0059 |
+| base | tasa_descuento | 0,9072 | 0,9378 | 0,9329 | 0,9386 |
+| base | capex_extra_pct | 0,0412 | 0,1016 | 0,0563 | 0,0555 |
+| base | p_bajo_si_alto | -0,0003 | 0,0102 | 0,0099 | 0,0059 |
+| optimista | tasa_descuento | 0,5590 | 0,9054 | 0,8789 | 0,9232 |
+| optimista | capex_extra_pct | 0,1973 | 0,3132 | 0,0696 | 0,0929 |
+| optimista | p_bajo_si_alto | -0,0323 | 0,0405 | 0,0051 | 0,0107 |
+
+(`hectareas` ST=0,0000 en los tres escenarios de `prob_van_negativo`, en
+ambas corridas — omitida de la tabla por no aportar información.)
+
+`tasa_descuento` es el ST más alto en los 6 casos (2 targets × 3
+escenarios), sin excepción, en ambas corridas. El orden relativo de las
+demás variables tampoco cambió en ningún caso -- lo que se mueve son las
+magnitudes, y ahí hay dos observaciones puntuales que no se ven en el
+promedio:
+
+- **`capex_extra_pct` pierde peso fuerte en riesgo, sobre todo en
+  optimista**: ST 0,313→0,093 (cae a menos de un tercio). En `base`
+  también cae bastante (0,102→0,056).
+- **En `prob_van_negativo`/optimista con el triangular viejo había un gap
+  S1-ST enorme para `tasa_descuento`** (S1=0,559 vs. ST=0,905 — 0,35 de
+  diferencia, señal de mucha interacción no explicada por el efecto de
+  primer orden). Con AR(1) ese gap casi se cierra (S1=0,879 vs. ST=0,923 —
+  0,04 de diferencia). Interpretación: con el triangular, buena parte de
+  esa "interacción" no eran los 6 parámetros de Sobol interactuando entre
+  sí, sino ruido de precio i.i.d. por año que se colaba como varianza de
+  interacción espuria en las evaluaciones repetidas con semilla fija; el
+  AR(1) -- al tener su propia estructura de persistencia en vez de ruido
+  i.i.d. -- redistribuye esa varianza de forma distinta, dejando un
+  resultado más cercano a un modelo aditivo en ese escenario.
+
 **Modelos ML reentrenados** (`src/entrenar_modelo.py`, mismo dataset →
 mismos R² que antes, sin sorpresas): RF 0,9861 / LightGBM 0,9926
 (`van_neto_medio_usd`); RF 0,9913 / LightGBM 0,9953 (`prob_van_negativo`).
