@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -13,7 +13,11 @@ from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
 from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
-from src.precio_estocastico import ParametrosPrecioAR1, simulate_prices_ar1_antitetico
+from src.precio_estocastico import (
+    ParametrosPrecioAR1,
+    simulate_prices_ar1,
+    simulate_prices_ar1_antitetico,
+)
 
 # ---------------------------------------------------------------------------
 # Constantes del plan de negocios y calibración climática
@@ -366,6 +370,18 @@ class ParametrosMC:
     escenario: Literal["pesimista", "base", "optimista"] = "base"
     tasa_descuento: float = 0.08
 
+    # Generador de precio: "ar1" (AR(1) sobre retornos log, calibrado con
+    # datos reales de FRED -- src/precio_estocastico.py) o "triangular"
+    # (ESCENARIOS_PRECIO, independiente por año, sin memoria). Default "ar1"
+    # porque es el modelo elegido -- calibrado con datos reales, ver
+    # notas/plan_precio_historico.md -- desde que hasta ahora convivían tres
+    # funciones run_monte_carlo*() con generadores distintos y sin que nadie
+    # lo hubiera decidido a propósito por función (feedback de Eze,
+    # notas/PLAN_TESIS.md). "triangular" queda disponible como modo
+    # explícito de comparación contra el modelo naive, no como default en
+    # ningún caller.
+    modo_precio: Literal["ar1", "triangular"] = "ar1"
+
     # Activa la variabilidad estocástica de CAPEX/OPEX (riego, pozo,
     # multiplicador de OPEX -- ver simulate_capex_extra()/
     # simulate_opex_multiplicador() más abajo). En False, capex_extra=0 y
@@ -654,6 +670,58 @@ def simulate_prices(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     return rng.triangular(low, mode, high, (params.n_simulaciones, params.n_años))
 
 
+def _despachar_precios(
+    params: ParametrosMC,
+    rng: np.random.Generator,
+    precio_params: ParametrosPrecioAR1 | None,
+) -> np.ndarray:
+    """
+    Despacha al generador de precio según `params.modo_precio` -- mismo
+    patrón que `capex_opex_estocastico`/`correlacionar_frio_calor`: el flag
+    decide DENTRO de la función compartida, no en funciones top-level
+    paralelas. Usado por `run_monte_carlo()` (muestreo directo).
+
+    Si `modo_precio="ar1"` y `precio_params` es None, se arma con
+    `ParametrosPrecioAR1(escenario=params.escenario)` -- así `escenario`
+    sigue siendo la única fuente de verdad de qué escenario correr, salvo
+    que se pase `precio_params` explícito (p. ej. para barrer el drift, ver
+    `src/dataset_ml.py`).
+    """
+    if params.modo_precio == "ar1":
+        if precio_params is None:
+            precio_params = ParametrosPrecioAR1(escenario=params.escenario)
+        return simulate_prices_ar1(params.n_simulaciones, params.n_años, precio_params, rng)
+    if params.modo_precio == "triangular":
+        return simulate_prices(params, rng)
+    raise ValueError(
+        f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
+    )
+
+
+def _despachar_precios_antitetico(
+    params: ParametrosMC,
+    rng: np.random.Generator,
+    precio_params: ParametrosPrecioAR1 | None,
+) -> np.ndarray:
+    """
+    Versión de `_despachar_precios()` con reducción de varianza por
+    variables antitéticas. Usado por `run_monte_carlo_antitetico()` y por
+    `run_monte_carlo_precio_historico()` (alias fino de la anterior con
+    `modo_precio="ar1"` forzado -- ver esa función).
+    """
+    if params.modo_precio == "ar1":
+        if precio_params is None:
+            precio_params = ParametrosPrecioAR1(escenario=params.escenario)
+        return simulate_prices_ar1_antitetico(
+            params.n_simulaciones, params.n_años, precio_params, rng
+        )
+    if params.modo_precio == "triangular":
+        return simulate_prices_antitetico(params, rng)
+    raise ValueError(
+        f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
+    )
+
+
 def simulate_revenue(
     yields_kg_ha: np.ndarray,
     prices_usd_kg: np.ndarray,
@@ -925,6 +993,7 @@ def _orquestar_resultado(
 def run_monte_carlo(
     params: ParametrosMC | None = None,
     costos: ParametrosCostos | None = None,
+    precio_params: ParametrosPrecioAR1 | None = None,
 ) -> pd.DataFrame:
     """
     Orquesta la simulación completa y retorna los resultados en formato tabular.
@@ -936,6 +1005,9 @@ def run_monte_carlo(
     se escala por un multiplicador estocástico único por simulación
     (`simulate_opex_multiplicador()`).
 
+    El precio se genera según `params.modo_precio` ("ar1", default, o
+    "triangular") -- ver `_despachar_precios()`.
+
     Parámetros
     ----------
     params : ParametrosMC, opcional
@@ -946,6 +1018,9 @@ def run_monte_carlo(
         Si es None se crea con `hectareas=params.hectareas`. Si se pasa
         explícito y su `.hectareas` no coincide con `params.hectareas`, se
         sincroniza automáticamente (se pisa `costos.hectareas`).
+    precio_params : ParametrosPrecioAR1, opcional
+        Solo tiene efecto con `params.modo_precio="ar1"`. Si es None se arma
+        con `ParametrosPrecioAR1(escenario=params.escenario)`.
 
     Retorna
     -------
@@ -958,7 +1033,7 @@ def run_monte_carlo(
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
-    prices = simulate_prices(params, rng)
+    prices = _despachar_precios(params, rng, precio_params)
     capex_extra = simulate_capex_extra(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -972,12 +1047,14 @@ def run_monte_carlo(
 def run_monte_carlo_antitetico(
     params: ParametrosMC | None = None,
     costos: ParametrosCostos | None = None,
+    precio_params: ParametrosPrecioAR1 | None = None,
 ) -> pd.DataFrame:
     """
     Igual que `run_monte_carlo()` (misma interfaz, mismas columnas de
-    salida), pero generando rendimiento, precio, CAPEX extra y multiplicador
-    de OPEX con reducción de varianza por variables antitéticas
-    (`simulate_yields_antitetico`, `simulate_prices_antitetico`,
+    salida, mismo despacho de precio según `params.modo_precio`), pero
+    generando rendimiento, precio, CAPEX extra y multiplicador de OPEX con
+    reducción de varianza por variables antitéticas
+    (`simulate_yields_antitetico`, `_despachar_precios_antitetico`,
     `simulate_capex_extra_antitetico`, `simulate_opex_multiplicador_antitetico`)
     en vez de muestreo directo.
 
@@ -989,7 +1066,7 @@ def run_monte_carlo_antitetico(
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields_antitetico(params, rng)
-    prices = simulate_prices_antitetico(params, rng)
+    prices = _despachar_precios_antitetico(params, rng, precio_params)
     capex_extra = simulate_capex_extra_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1006,37 +1083,20 @@ def run_monte_carlo_precio_historico(
     precio_params: ParametrosPrecioAR1 | None = None,
 ) -> pd.DataFrame:
     """
-    Igual que `run_monte_carlo_antitetico()` (misma interfaz, mismas columnas
-    de salida), pero generando el precio con `simulate_prices_ar1_antitetico()`
-    (`src/precio_estocastico.py`, AR(1) sobre retornos log calibrado con datos
-    reales de FRED) en vez de `simulate_prices_antitetico()` (triangular
-    independiente por año). `simulate_prices()`/`ESCENARIOS_PRECIO` quedan
-    intactos como referencia/comparación para la tesis.
-
-    Si `precio_params` es None, se arma con
-    `ParametrosPrecioAR1(escenario=params.escenario)` — así el `escenario` de
-    `ParametrosMC` sigue siendo la única fuente de verdad de qué escenario
-    correr, sin pasar dos objetos con el mismo campo potencialmente
-    desincronizados.
+    Alias fino de `run_monte_carlo_antitetico()` con `modo_precio="ar1"`
+    forzado. Se mantiene solo por compatibilidad con callers existentes
+    (`src/dataset_ml.py`, que barre `precio_params.c` por LHS); no agrega
+    lógica propia -- desde que "ar1" es el default de `ParametrosMC`, esta
+    función y `run_monte_carlo_antitetico(params, costos, precio_params)` son
+    equivalentes. Si `params` trae `modo_precio="triangular"` explícito, se
+    lo pisa a "ar1" (esta función siempre fue AR(1); no tiene sentido que un
+    caller la llame pidiendo el modo contrario).
     """
-    params, costos = _resolver_params_costos(params, costos)
-    rng = np.random.default_rng(params.semilla)
-
-    if precio_params is None:
-        precio_params = ParametrosPrecioAR1(escenario=params.escenario)
-
-    yields = simulate_yields_antitetico(params, rng)
-    prices = simulate_prices_ar1_antitetico(
-        params.n_simulaciones, params.n_años, precio_params, rng
-    )
-    capex_extra = simulate_capex_extra_antitetico(
-        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
-    )
-    opex_mult = simulate_opex_multiplicador_antitetico(
-        params.n_simulaciones, costos, rng, params.capex_opex_estocastico
-    )
-
-    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    if params is None:
+        params = ParametrosMC()
+    if params.modo_precio != "ar1":
+        params = replace(params, modo_precio="ar1")
+    return run_monte_carlo_antitetico(params, costos, precio_params)
 
 
 def _tir_vectorizada(

@@ -483,6 +483,69 @@ feature de `ESPACIO_PARAMETROS` ni variable de `PROBLEMA_SOBOL`, contaminando
 input. Con `correlacionar_frio_calor` no había problema práctico (su default ya
 era `False`), pero se fijó explícito por el mismo criterio.
 
+### Generador de precio consolidado en un solo flag (`modo_precio`), en vez de tres funciones paralelas
+
+Resuelto el 2026-09-23, a pedido del feedback de Eze (tutor): existían tres
+funciones `run_monte_carlo*()` con un generador de precio distinto cada una
+y sin que nadie lo hubiera decidido a propósito por función —
+`run_monte_carlo()` y `run_monte_carlo_antitetico()` usaban el triangular
+simple (`simulate_prices`/`simulate_prices_antitetico`), mientras que
+`run_monte_carlo_precio_historico()` usaba el AR(1) calibrado con datos
+reales de FRED (`src/precio_estocastico.py`, ver más arriba en esta misma
+sección). Consecuencia real, no hipotética: `app.py` y `src/sensibilidad.py`
+quedaron en el triangular y `src/dataset_ml.py` en el AR(1) sin decisión
+explícita de por medio.
+
+**Cambio** (`src/monte_carlo.py`, sin tocar `app.py`, `src/sensibilidad.py`
+ni `src/dataset_ml.py` — ver "Problemas abiertos" para ese próximo paso):
+
+- `ParametrosMC.modo_precio: Literal["ar1", "triangular"] = "ar1"` — nuevo
+  campo, default AR(1) porque es el modelo elegido (calibrado con datos
+  reales, ver notas/plan_precio_historico.md). El triangular queda
+  disponible como modo explícito de comparación contra el modelo naive, ya
+  no por default en ningún lado.
+- `run_monte_carlo()` y `run_monte_carlo_antitetico()` despachan
+  internamente según `params.modo_precio` (funciones privadas
+  `_despachar_precios()`/`_despachar_precios_antitetico()`) — mismo patrón
+  que ya usan `capex_opex_estocastico`/`correlacionar_frio_calor`: el flag
+  decide DENTRO de la función compartida, no en funciones top-level
+  paralelas. Ambas aceptan ahora un `precio_params: ParametrosPrecioAR1`
+  opcional (solo tiene efecto con `modo_precio="ar1"`), necesario porque
+  `src/dataset_ml.py` barre el drift (`precio_params.c`) por LHS.
+- `run_monte_carlo_precio_historico()` queda como **alias fino** de
+  `run_monte_carlo_antitetico()` con `modo_precio="ar1"` forzado (no se
+  elimina: es el único caller de `src/dataset_ml.py`, que este cambio
+  explícitamente no toca todavía).
+
+**Validación** (50 ha, 10.000 simulaciones, escenario base, semilla 42,
+`capex_opex_estocastico=True` default, sobre `van_neto_usd` al año 20):
+
+| Función | `modo_precio` | VAN medio | P(VAN<0) |
+|---|---|---:|---:|
+| `run_monte_carlo()` | triangular | USD 1.273.871 | 1,72% |
+| `run_monte_carlo()` | ar1 (nuevo default) | USD 2.257.098 | 19,60% |
+| `run_monte_carlo_antitetico()` | triangular | USD 1.279.569 | 1,64% |
+| `run_monte_carlo_antitetico()` | ar1 | USD 2.244.566 | 20,50% |
+| `run_monte_carlo_precio_historico()` (alias) | — | USD 2.244.566 | 20,50% |
+
+`triangular` en ambas funciones reproduce EXACTO (mismo orden de consumo de
+`rng`, código sin cambios de comportamiento) los valores ya documentados
+más arriba en esta sección (1,72% para `run_monte_carlo()`, la fila
+`correlacionar_frio_calor=False, semilla=42` de la tabla de robustez). El
+alias `run_monte_carlo_precio_historico()` da bit-idéntico a
+`run_monte_carlo_antitetico(modo_precio="ar1")`, como corresponde a un
+alias sin lógica propia. Migración confirmada sin sorpresas.
+
+**Efecto en los callers existentes, sin tocar su código**: como `"ar1"` es
+ahora el default de `ParametrosMC`, `app.py` (`run_monte_carlo()`) y
+`src/sensibilidad.py` (`run_monte_carlo_antitetico()`) pasan a usar AR(1)
+automáticamente la próxima vez que corran — sin editar esos archivos, que
+es el punto de centralizar la decisión en el dataclass. `src/dataset_ml.py`
+sigue en AR(1) sin cambios (vía el alias). Falta como próximo paso (ver
+"Problemas abiertos"): confirmarlo corriendo la interfaz y regenerar
+Sobol/dataset/modelos si corresponde, una vez que Emilia dé el visto bueno
+a este cambio en el motor.
+
 ## Problemas abiertos
 
 ### Los parámetros clave no tienen soporte bibliográfico
@@ -536,6 +599,32 @@ Si en algún momento se usa el modelo ML o se interpretan los índices de
 Sobol para escenarios de >100 ha, es **extrapolación fuera del rango de
 entrenamiento** y hay que decirlo explícito (o re-barrer con el piso/techo
 ampliado). No es urgente: hoy la interfaz sólo usa el motor.
+
+### Confirmar y propagar `modo_precio="ar1"` a app.py/sensibilidad.py, y decidir si regenerar Sobol/dataset/modelos
+
+Pendiente tras consolidar el generador de precio en `ParametrosMC.modo_precio`
+(ver "Resuelto" más arriba, 2026-09-23). El cambio en `src/monte_carlo.py` ya
+hace que `app.py` y `src/sensibilidad.py` pasen a usar AR(1) por default sin
+tocar esos archivos, pero eso implica:
+- `data/processed/sobol_indices.parquet`/`sobol_indices_riesgo.parquet` se
+  calcularon con `correlacionar_frio_calor`/`capex_opex_estocastico`
+  explícitos en `False` pero **sin pasar `modo_precio`** — heredaban el
+  triangular viejo (la función usada, `run_monte_carlo_antitetico()`, no
+  tenía otro modo). Con el default nuevo, una re-corrida daría AR(1) y
+  probablemente movería bastante `prob_van_negativo` (ver la comparación
+  20,50% vs. 1,64% de la entrada resuelta). Hay que decidir si se re-corre
+  Sobol con AR(1) o si `_evaluar_metrica()` fija `modo_precio="triangular"`
+  explícito a propósito (mismo criterio que ya usa para
+  `capex_opex_estocastico`/`correlacionar_frio_calor`).
+- `src/dataset_ml.py` no se ve afectado (sigue en AR(1) vía el alias
+  `run_monte_carlo_precio_historico()`, sin cambios).
+- Falta correr `app.py` en Streamlit y confirmar visualmente que la
+  distribución del VAN con AR(1) se ve razonable en la UI (fan charts,
+  comparación de escenarios).
+
+Bloqueado hasta que Emilia confirme que el cambio en `monte_carlo.py` está
+bien (pedido explícito: no tocar `app.py`/`sensibilidad.py`/`dataset_ml.py`
+todavía).
 
 ### El motor escala TODO el CAPEX linealmente con hectáreas — probablemente incorrecto para varios ítems
 
