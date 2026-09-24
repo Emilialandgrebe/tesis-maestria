@@ -548,6 +548,20 @@ a este cambio en el motor.
 
 ## Problemas abiertos
 
+### `st.markdown` rompe el formato de P10/P50/P90 cuando P10 es negativo (app.py)
+
+Detectado el 2026-09-23 probando la UI en el navegador tras el cambio de
+`modo_precio` (más común de ver ahora que con AR(1) el P10 da negativo más
+seguido, pero el bug es preexistente, no introducido por ese cambio). La
+línea `st.markdown(f"**P10:** US$ {p10:,.0f}  ·  **P50:** US$ {p50:,.0f}  ·
+**P90:** US$ {p90:,.0f}")` en la pestaña "Distribución del VAN": cuando
+`p10` es negativo, el texto resultante contiene dos `$` (de "US$") con un
+número negativo en el medio, y Streamlit interpreta ese tramo como
+delimitador de LaTeX en vez de texto literal — rompe el formato en pantalla
+(muestra fórmula en vez de "US$ -667.568"). Arreglo simple: no usar el
+símbolo `$` literal (reemplazar "US$" por "USD" en ese f-string, o escapar
+con `\$`). No se corrigió en este cambio por estar fuera de su alcance.
+
 ### Los parámetros clave no tienen soporte bibliográfico
 
 Algunos números que están en el código son supuestos que hay que citar o justificar:
@@ -600,31 +614,102 @@ Sobol para escenarios de >100 ha, es **extrapolación fuera del rango de
 entrenamiento** y hay que decirlo explícito (o re-barrer con el piso/techo
 ampliado). No es urgente: hoy la interfaz sólo usa el motor.
 
-### Confirmar y propagar `modo_precio="ar1"` a app.py/sensibilidad.py, y decidir si regenerar Sobol/dataset/modelos
+### `modo_precio="ar1"` propagado a app.py y sensibilidad.py; Sobol/dataset/modelos regenerados
 
-Pendiente tras consolidar el generador de precio en `ParametrosMC.modo_precio`
-(ver "Resuelto" más arriba, 2026-09-23). El cambio en `src/monte_carlo.py` ya
-hace que `app.py` y `src/sensibilidad.py` pasen a usar AR(1) por default sin
-tocar esos archivos, pero eso implica:
-- `data/processed/sobol_indices.parquet`/`sobol_indices_riesgo.parquet` se
-  calcularon con `correlacionar_frio_calor`/`capex_opex_estocastico`
-  explícitos en `False` pero **sin pasar `modo_precio`** — heredaban el
-  triangular viejo (la función usada, `run_monte_carlo_antitetico()`, no
-  tenía otro modo). Con el default nuevo, una re-corrida daría AR(1) y
-  probablemente movería bastante `prob_van_negativo` (ver la comparación
-  20,50% vs. 1,64% de la entrada resuelta). Hay que decidir si se re-corre
-  Sobol con AR(1) o si `_evaluar_metrica()` fija `modo_precio="triangular"`
-  explícito a propósito (mismo criterio que ya usa para
-  `capex_opex_estocastico`/`correlacionar_frio_calor`).
-- `src/dataset_ml.py` no se ve afectado (sigue en AR(1) vía el alias
-  `run_monte_carlo_precio_historico()`, sin cambios).
-- Falta correr `app.py` en Streamlit y confirmar visualmente que la
-  distribución del VAN con AR(1) se ve razonable en la UI (fan charts,
-  comparación de escenarios).
+Resuelto el 2026-09-23 (Fase A, paso 2 — cierra el punto 3 del feedback de
+Eze: que la elección del generador de precio no quedara implícita/heredada
+en ningún caller). Sobre la consolidación de `ParametrosMC.modo_precio` (ver
+la entrada "Resuelto" anterior), quedaban dos lugares que heredaban el
+triangular viejo en silencio: `app.py` (vía `run_monte_carlo()`) y
+`src/sensibilidad.py` (vía `run_monte_carlo_antitetico()` en
+`_evaluar_metrica()`). Ninguno de los dos tenía en su docstring una
+justificación puntual para preservar el triangular a propósito — era
+inercia del código anterior a que existiera el flag, así que se corrigieron
+ambos.
 
-Bloqueado hasta que Emilia confirme que el cambio en `monte_carlo.py` está
-bien (pedido explícito: no tocar `app.py`/`sensibilidad.py`/`dataset_ml.py`
-todavía).
+**Cambios:**
+
+- `app.py`: nuevo selector "Modelo de precio" en el sidebar (`st.selectbox`,
+  opciones AR(1)/triangular, default AR(1)). Se corrigió el texto de ayuda
+  de "Escenario de precio" (ya no afirma "distribución triangular" como si
+  fuera el único modelo) y se agregaron menciones al modo de precio activo
+  en la pestaña "Comparar escenarios" y un aviso en la pestaña "Sensibilidad
+  (Sobol)" cuando el modo seleccionado no coincide con el usado para
+  pre-calcular esos índices (siempre AR(1) ahora).
+- `src/sensibilidad.py`: `_evaluar_metrica()` fija `modo_precio="ar1"`
+  explícito al construir `ParametrosMC` -- mismo patrón que ya usa para
+  `capex_opex_estocastico=False`/`correlacionar_frio_calor=False`. Se
+  eligió `"ar1"` (no `"triangular"`) porque Sobol debe analizar el
+  simulador "oficial" (el que corre `app.py` por default), no el modelo
+  naive.
+- `src/dataset_ml.py` **sin cambios** (ya usaba AR(1) vía
+  `run_monte_carlo_precio_historico()`).
+
+**Dataset LHS (`src/dataset_ml.py`) regenerado para confirmar**: 685s total
+(train 521s + test 164s). **Byte-idéntico** al commiteado
+(`DataFrame.equals` = True, 2400×19 train y 600×19 test) — no cambió, como
+se esperaba, porque ya corría en AR(1) antes de este cambio.
+
+**Sobol regenerado** (`n_base=128`, mismos parámetros que la corrida
+anterior; 2055s total): acá SÍ cambian los números, porque antes corría con
+el triangular heredado y ahora con AR(1) explícito.
+
+VAN medio (ST, promedio entre escenarios):
+
+| parámetro | ST viejo (triangular) | ST nuevo (AR1) |
+|---|---:|---:|
+| tasa_descuento | 0,8934 | 0,8856 |
+| hectareas | 0,0763 | 0,0930 |
+| capex_extra_pct | 0,0378 | 0,0248 |
+| p_bajo_si_alto | 0,00518 | 0,00459 |
+| precision_factor_frio | ~0 | ~0 |
+| precision_factor_calor | ~0 | ~0 |
+
+Riesgo (`prob_van_negativo`, ST):
+
+| parámetro | ST viejo (triangular) | ST nuevo (AR1) |
+|---|---:|---:|
+| tasa_descuento | 0,9340 | 0,9345 |
+| capex_extra_pct | 0,1584 | 0,0663 |
+| p_bajo_si_alto | 0,0195 | 0,0075 |
+| precision_factor_frio | 0,0003 | 0,0001 |
+| precision_factor_calor | 0,0001 | 0,0001 |
+| hectareas | 0,0000 | 0,0000 |
+
+**`tasa_descuento` sigue dominando lejos, en ambos targets y en las dos
+corridas** — el ranking no cambió de orden. Lo que sí se mueve: con AR(1),
+`hectareas` gana algo de peso en el VAN medio (0,076→0,093, la escala
+importa un poco más cuando el precio ya no se "cancela" entre años vía el
+triangular independiente) y `capex_extra_pct` pierde peso en ambos targets,
+más marcado en riesgo (0,158→0,066) — con AR(1) el precio explica una
+porción mayor de la varianza de `prob_van_negativo` que antes se le
+atribuía en parte al ruido de CAPEX/OPEX vía correlación espuria con la
+semilla compartida, así que `capex_extra_pct` queda con menos varianza
+residual para explicar. `precision_factor_frio`/`_calor` siguen en ~0 en
+ambas corridas (correcto: no mueven la media por construcción).
+
+**Modelos ML reentrenados** (`src/entrenar_modelo.py`, mismo dataset →
+mismos R² que antes, sin sorpresas): RF 0,9861 / LightGBM 0,9926
+(`van_neto_medio_usd`); RF 0,9913 / LightGBM 0,9953 (`prob_van_negativo`).
+La tabla de importancia de features del RF sigue liderada por
+`tasa_descuento`/`hectareas`/`escenario`, consistente con el ranking de
+Sobol nuevo.
+
+**UI verificada en el navegador** (`streamlit run app.py`, Chrome vía
+claude-in-chrome): el selector "Modelo de precio" cambia correctamente
+entre AR(1) (default, VAN medio ≈USD 2,31M, P(VAN<0)≈18,8% a N=3.000) y
+triangular (VAN medio ≈USD 1,29M, P(VAN<0)≈1,8% a N=3.000) -- ambos en
+línea con los valores de la corrida de 10.000 simulaciones de la entrada
+anterior. El histograma se ve visiblemente más angosto en triangular
+(consistente con no tener memoria/persistencia de precio). El aviso de
+"Sobol no refleja el modo triangular seleccionado" aparece correctamente
+al cambiar de modo. Detectado de paso, **no corregido acá por estar fuera
+de alcance** de este cambio: el markdown de P10/P50/P90 en la pestaña
+"Distribución del VAN" (`st.markdown(f"**P10:** US$ {p10:,.0f} ...")`) se
+renderiza mal cuando `p10` es negativo -- Streamlit interpreta el `$...$`
+como delimitador de LaTeX y rompe el formato. Es un bug preexistente
+(no introducido por este cambio), más visible ahora porque con AR(1) el
+P10 da negativo más seguido.
 
 ### El motor escala TODO el CAPEX linealmente con hectáreas — probablemente incorrecto para varios ítems
 

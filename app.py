@@ -59,6 +59,7 @@ def simular(
     tasa_descuento: float,
     capex_opex_estocastico: bool,
     correlacionar_frio_calor: bool,
+    modo_precio: str,
     n_simulaciones: int,
     semilla: int,
 ) -> dict:
@@ -84,6 +85,7 @@ def simular(
         tasa_descuento=tasa_descuento,
         capex_opex_estocastico=capex_opex_estocastico,
         correlacionar_frio_calor=correlacionar_frio_calor,
+        modo_precio=modo_precio,
         semilla=semilla,
     )
     costos = ParametrosCostos(hectareas=hectareas)
@@ -136,7 +138,28 @@ with st.sidebar:
 
     escenario = st.selectbox(
         "Escenario de precio", options=ESCENARIOS, index=1,
-        help="Distribución triangular de precio USD/kg (ESCENARIOS_PRECIO en el motor).",
+        help=(
+            "Nivel de precio ancla (USD/kg) del proyecto. El modelo "
+            "probabilístico que genera la trayectoria de precio alrededor "
+            "de ese ancla se elige abajo, en 'Modelo de precio'."
+        ),
+    )
+
+    modo_precio = st.selectbox(
+        "Modelo de precio", options=["ar1", "triangular"], index=0,
+        format_func=lambda m: (
+            "AR(1) sobre retornos, calibrado con FRED" if m == "ar1"
+            else "Triangular independiente por año (naive)"
+        ),
+        help=(
+            "AR(1) (default del motor): proceso con memoria calibrado con "
+            "datos reales de precio del pistacho (FRED, WPU01190106) -- ver "
+            "src/precio_estocastico.py. Modela el riesgo de precio como "
+            "sistemático/persistente, no idiosincrático. "
+            "Triangular: ESCENARIOS_PRECIO, independiente por año sin "
+            "memoria -- el modelo naive anterior, disponible acá solo como "
+            "comparación explícita."
+        ),
     )
 
     tasa_descuento = st.slider(
@@ -167,6 +190,7 @@ _args_comunes = dict(
     tasa_descuento=float(tasa_descuento),
     capex_opex_estocastico=bool(capex_opex_estocastico),
     correlacionar_frio_calor=bool(correlacionar_frio_calor),
+    modo_precio=modo_precio,
     n_simulaciones=int(n_simulaciones),
     semilla=SEMILLA,
 )
@@ -294,9 +318,15 @@ with tab_sobol:
 
         st.caption(
             "Índices de Sobol **totales (ST)** del VAN medio, pre-calculados con "
-            "`src/sensibilidad.py` (no se recalculan en vivo). Barras de error = "
-            "IC bootstrap (`ST_conf`)."
+            "`src/sensibilidad.py` con `modo_precio=\"ar1\"` (no se recalculan en "
+            "vivo). Barras de error = IC bootstrap (`ST_conf`)."
         )
+        if modo_precio != "ar1":
+            st.info(
+                "El sidebar tiene 'Modelo de precio' en triangular, pero estos "
+                "índices se pre-calcularon con AR(1) -- no recalculan en vivo, "
+                "así que no reflejan el modo triangular seleccionado."
+            )
         fig, ax = plt.subplots(figsize=(8, 3.8))
         ax.barh(
             sub["parametro"], sub["ST"],
@@ -325,6 +355,7 @@ with tab_cmp:
         f"Los tres escenarios de precio a los parámetros actuales del sidebar "
         f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
         f"CAPEX/OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
+        f"modelo de precio {'AR(1)' if modo_precio == 'ar1' else 'triangular'}, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):

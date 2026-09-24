@@ -2,7 +2,9 @@
 
 No usa un dataset sintético ni Hipercubo Latino: cada punto de la muestra de
 Sobol corre una simulación completa (`run_monte_carlo_antitetico` +
-`resumen_financiero`) con esos parámetros.
+`resumen_financiero`) con esos parámetros. El precio usa `modo_precio="ar1"`
+explícito (ver `_evaluar_metrica`) -- el modelo AR(1) calibrado con datos
+reales de FRED, no el triangular naive.
 """
 
 from __future__ import annotations
@@ -107,6 +109,15 @@ def _evaluar_metrica(
         # fuente de ruido no barrida, fuera del problema de Sobol.
         capex_opex_estocastico=False,
         correlacionar_frio_calor=False,
+        # Explícito en "ar1" (el default del motor desde Fase A/paso 2, ver
+        # PLAN_TESIS.md): antes de que existiera este flag, esta función
+        # heredaba en silencio el triangular de run_monte_carlo_antitetico()
+        # sin que nadie lo hubiera decidido a propósito para Sobol -- mismo
+        # tipo de gap que ya se cerró acá para capex_opex_estocastico/
+        # correlacionar_frio_calor. Se fija ar1 (no se deja el default
+        # heredado) porque es el modelo de precio calibrado con datos reales
+        # y Sobol debe analizar el simulador "oficial", no el modelo naive.
+        modo_precio="ar1",
     )
     costos = ParametrosCostos(hectareas=hectareas)
     costos.capex_inicial_ha *= 1.0 + capex_extra_pct
