@@ -8,6 +8,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from scipy import integrate
+from scipy.optimize import brentq
 from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 from scipy.stats import triang as triang_dist
@@ -1177,26 +1178,53 @@ def _tir_vectorizada(
     el año 0 incluido) mediante Newton-Raphson vectorizado.
 
     Retorna NaN en las filas que no convergen (p. ej. si el flujo nunca
-    cambia de signo, la TIR no está definida).
+    cambia de signo, la TIR no está definida). Una fila cuenta como
+    convergida solo si, al final, la tasa quedó estrictamente dentro de los
+    límites del clip [-0.99, 10] y el VAN a esa tasa es ~0 (relativo a la
+    suma de |flujos|). Sin esa verificación, una fila que diverge queda
+    clavada en el límite (el clip anula el paso) y se marcaba como
+    "convergida" con TIR = 1000%: pasaba en simulaciones que nunca
+    recuperan la inversión, e inflaba `tir_media` en src/dataset_ml.py.
     """
     n, T = flujos_con_capex.shape
     t = np.arange(T).reshape(1, T)
     r = np.full(n, tasa_inicial)
-    convergio = np.zeros(n, dtype=bool)
+    limite_inf, limite_sup = -0.99, 10.0
 
+    def _van(tasa: np.ndarray) -> np.ndarray:
+        return np.sum(flujos_con_capex / (1.0 + tasa.reshape(-1, 1)) ** t, axis=1)
+
+    paso = np.zeros(n)
     for _ in range(max_iter):
-        denom = (1.0 + r.reshape(-1, 1)) ** t
-        npv = np.sum(flujos_con_capex / denom, axis=1)
+        npv = _van(r)
         dnpv = np.sum(
             -t * flujos_con_capex / (1.0 + r.reshape(-1, 1)) ** (t + 1), axis=1
         )
         dnpv = np.where(np.abs(dnpv) < 1e-12, np.nan, dnpv)
         paso = np.nan_to_num(npv / dnpv, nan=0.0)
-        r_nuevo = np.clip(r - paso, -0.99, 10.0)
-        convergio |= np.abs(r_nuevo - r) < tol
-        r = r_nuevo
+        r = np.clip(r - paso, limite_inf, limite_sup)
 
-    return np.where(convergio, r, np.nan)
+    escala = np.abs(flujos_con_capex).sum(axis=1)
+    convergio = (
+        (np.abs(paso) < tol)
+        & (r > limite_inf)
+        & (r < limite_sup)
+        & (np.abs(_van(r)) <= 1e-8 * escala)
+    )
+    r = np.where(convergio, r, np.nan)
+
+    # Respaldo por bisección (brentq) para las filas donde Newton no
+    # converge desde `tasa_inicial` pero el VAN sí cambia de signo dentro de
+    # los límites: con años negativos después de la primera cosecha (precio
+    # bajo + vecería) el VAN puede no ser monótono cerca de la tasa inicial.
+    # Son pocas filas, el loop en Python no pesa.
+    a, b = limite_inf + 1e-6, limite_sup
+    for i in np.flatnonzero(~convergio):
+        fila = flujos_con_capex[i]
+        van_fila = lambda x: float(np.sum(fila / (1.0 + x) ** t[0]))  # noqa: E731
+        if np.sign(van_fila(a)) != np.sign(van_fila(b)):
+            r[i] = brentq(van_fila, a, b, xtol=tol)
+    return r
 
 
 def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFrame:
