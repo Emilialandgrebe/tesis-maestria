@@ -147,8 +147,7 @@ def evaluar_punto(
         capex_opex_estocastico=False,
         correlacionar_frio_calor=False,
     )
-    costos = ParametrosCostos(hectareas=fila["hectareas"])
-    costos.capex_inicial_ha *= 1.0 + fila["capex_extra_pct"]
+    costos = ParametrosCostos(hectareas=fila["hectareas"], capex_factor=1.0 + fila["capex_extra_pct"])
 
     precio_params = ParametrosPrecioAR1(
         escenario=fila["escenario"],

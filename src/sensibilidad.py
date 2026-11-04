@@ -68,10 +68,10 @@ def _evaluar_metrica(
       de simulaciones con VAN negativo, una pregunta de RIESGO distinta de
       "cuánto VAN se espera en promedio".
 
-    `capex_extra_pct` no es un campo de ParametrosCostos (no se modifica
-    src/costos.py): se aplica acá como un recargo sobre `capex_inicial_ha`,
-    representando la incertidumbre de los ítems de CAPEX sin cotizar
-    (riego, pozo, represa, paneles — ver data/external/README.md).
+    `capex_extra_pct` se pasa como `ParametrosCostos.capex_factor`
+    (1 + pct), un recargo sobre todo el CAPEX que representa la
+    incertidumbre de los ítems "A confirmar" del Excel v2 (riego por goteo,
+    subsolado, tutores, reservorio -- ver data/modelo_v2/capex.csv).
 
     La semilla se mantiene FIJA en todas las evaluaciones (no varía con
     `fila`): así la única fuente de variación en el output es el barrido de
@@ -119,8 +119,7 @@ def _evaluar_metrica(
         # y Sobol debe analizar el simulador "oficial", no el modelo naive.
         modo_precio="ar1",
     )
-    costos = ParametrosCostos(hectareas=hectareas)
-    costos.capex_inicial_ha *= 1.0 + capex_extra_pct
+    costos = ParametrosCostos(hectareas=hectareas, capex_factor=1.0 + capex_extra_pct)
 
     df = run_monte_carlo_antitetico(params, costos)
     resumen = resumen_financiero(df, costos)

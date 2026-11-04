@@ -12,7 +12,7 @@ from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
-from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
+from src.costos import HECTAREAS_REFERENCIA, ParametrosCostos, flujo_caja_neto, opex_total
 from src.precio_estocastico import (
     ParametrosPrecioAR1,
     simulate_prices_ar1,
@@ -23,7 +23,7 @@ from src.precio_estocastico import (
 # Constantes del plan de negocios y calibración climática
 # ---------------------------------------------------------------------------
 
-HECTAREAS = 50.0
+HECTAREAS = HECTAREAS_REFERENCIA  # 120 ha, Supuestos!B11 del Excel v2
 
 # Rendimiento VALIDADO en plena producción (año 12+): dato real, tomado de
 # data/external/produccion_ingresos_plan.csv (el plan de negocio). Es el
@@ -914,9 +914,12 @@ def _orquestar_resultado(
     opex_multiplicador: np.ndarray,
 ) -> pd.DataFrame:
     """
-    Arma el DataFrame de resultados (ingresos, OPEX, flujo neto, VAN neto) a
-    partir de arrays de rendimiento, precio, CAPEX extra y multiplicador de
-    OPEX ya simulados. Usado por las tres `run_monte_carlo*()` — la única
+    Arma el DataFrame de resultados (ingresos, OPEX, EBITDA, Ganancias,
+    flujo neto, VAN neto) a partir de arrays de rendimiento, precio, CAPEX
+    extra y multiplicador de OPEX ya simulados. El flujo replica la hoja
+    Flujo del Excel v2 (ver `flujo_caja_neto()` en src/costos.py): flujo
+    libre del proyecto después de Ganancias, sin financiamiento, con el
+    valor residual de la tierra sumado en el último año. Usado por las tres `run_monte_carlo*()` — la única
     diferencia entre ellas es cómo se generan esos cuatro arrays (muestreo
     directo vs. variables antitéticas).
 
@@ -932,8 +935,11 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
+    produccion_kg = yields * params.hectareas
     revenue = simulate_revenue(yields, prices, params.hectareas)
-    flujo_neto = flujo_caja_neto(revenue, costos, opex_multiplicador)
+    opex = opex_total(produccion_kg, revenue, costos, opex_multiplicador)
+    flujo = flujo_caja_neto(revenue, opex, costos)
+    flujo_neto = flujo["flujo_neto"]
 
     años = np.arange(1, params.n_años + 1)
     factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
@@ -942,18 +948,15 @@ def _orquestar_resultado(
     capex_total_usd = costos.capex_inicial + capex_extra_usd  # (n,)
     van_neto_acum = -capex_total_usd.reshape(n, 1) + np.cumsum(vp_neto, axis=1)
 
-    opex_base_por_año = np.array(
-        [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
-    ).reshape(1, T)
-    opex_real = opex_base_por_año * np.asarray(opex_multiplicador).reshape(n, 1)
-
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
         "rendimiento_kg_ha": yields.ravel(),
         "precio_usd_kg":    prices.ravel(),
         "ingreso_usd":      revenue.ravel(),
-        "opex_usd":         opex_real.ravel(),
+        "opex_usd":         opex.ravel(),
+        "ebitda_usd":       flujo["ebitda"].ravel(),
+        "impuesto_ganancias_usd": flujo["impuesto_ganancias"].ravel(),
         "flujo_neto_usd":   flujo_neto.ravel(),
         "vp_neto_usd":      vp_neto.ravel(),
         "van_neto_usd":     van_neto_acum.ravel(),
@@ -969,8 +972,9 @@ def run_monte_carlo(
     """
     Orquesta la simulación completa y retorna los resultados en formato tabular.
 
-    El VAN se calcula sobre el flujo de caja neto (ingresos - OPEX), no sobre
-    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0):
+    El VAN se calcula sobre el flujo libre del proyecto (ingresos - OPEX -
+    Ganancias + valor residual en el año 20, ver src/costos.py), en USD
+    constantes y a tasa real. El CAPEX inicial se descuenta en el año 0 (factor 1.0):
     solo el componente fijo (`costos.capex_inicial`) tiene efecto -- el
     estocástico (`simulate_capex_extra()`) devuelve cero desde Fase B, ver
     src/costos.py. El OPEX de cada año se escala por un multiplicador
@@ -997,7 +1001,8 @@ def run_monte_carlo(
     -------
     pd.DataFrame con columnas:
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
-        ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd,
+        ingreso_usd, opex_usd, ebitda_usd, impuesto_ganancias_usd,
+        flujo_neto_usd, vp_neto_usd, van_neto_usd,
         capex_extra_estocastico_usd
     """
     params, costos = _resolver_params_costos(params, costos)
