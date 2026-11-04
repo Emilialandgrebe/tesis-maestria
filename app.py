@@ -166,7 +166,11 @@ with st.sidebar:
     tasa_descuento = st.slider(
         "Tasa de descuento real", min_value=0.02, max_value=0.25, value=0.1423, step=0.0025,
         format="%.4f",
-        help="Variable dominante en el análisis de Sobol (S_T ≈ 0,86–0,92).",
+        help=(
+            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). Variable "
+            "dominante en el análisis de Sobol (rango 10–18%): S_T ≈ 0,76–0,92 "
+            "sobre el VAN medio y ≈ 0,86–0,89 sobre P(VAN<0), según el escenario."
+        ),
     )
 
     capex_opex_estocastico = st.checkbox(
