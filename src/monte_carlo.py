@@ -13,6 +13,7 @@ from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
 from src.costos import HECTAREAS_REFERENCIA, ParametrosCostos, flujo_caja_neto, opex_total
+from src.modelo_v2 import cargar_modelo_v2
 from src.precio_estocastico import (
     ParametrosPrecioAR1,
     simulate_prices_ar1,
@@ -23,15 +24,16 @@ from src.precio_estocastico import (
 # Constantes del plan de negocios y calibración climática
 # ---------------------------------------------------------------------------
 
+_MODELO = cargar_modelo_v2()
+
 HECTAREAS = HECTAREAS_REFERENCIA  # 120 ha, Supuestos!B11 del Excel v2
 
-# Rendimiento VALIDADO en plena producción (año 12+): dato real, tomado de
-# data/external/produccion_ingresos_plan.csv (el plan de negocio). Es el
-# rendimiento ESPERADO una vez aplicados frío, calor, vecería y
-# supervivencia en sus valores medios/calibrados — no un valor que se
-# observe todos los años (la propia curva de esa fuente rebota entre
-# ~2.400 y 3.000 kg/ha por vecería).
-RENDIMIENTO_VALIDADO_KG_HA = 3_000
+# Rendimiento a plena producción (100% de la curva): Supuestos!B20 del Excel
+# v2, 3.000 kg/ha de pistacho con cáscara. Es el rendimiento ESPERADO una
+# vez aplicados frío, calor y supervivencia en sus valores medios
+# calibrados (la vecería tiene media 1 desde la sincronización v2, ver
+# `_media_veceria()`), no un valor que se observe todos los años.
+RENDIMIENTO_VALIDADO_KG_HA = _MODELO.supuestos["rendimiento_plena_kg_ha"]
 
 # Calibración climática y biológica real (Módulo 0, ERA5-Land / Open-Meteo,
 # Jocolí 1990-2024). Se usan tanto como defaults de ParametrosMC como para
@@ -57,14 +59,35 @@ _PLANTAS_BETA = 20.0
 # chequeo de robustez contra el ruido de muestreo del propio Monte Carlo.
 CORR_HORAS_FRIO_TMAX_VERANO = -0.2894
 
-# Fracción del rendimiento pleno por año del proyecto (1–20)
-_CURVA_BASE: dict[int, float] = {
-    1: 0.00, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00,
-    6: 0.10, 7: 0.20, 8: 0.40, 9: 0.60, 10: 0.75,
-    11: 0.85, 12: 0.95,
+# Fracción del rendimiento pleno por año del proyecto (1-20).
+#
+# CURVA_EXCEL es la curva de Supuestos!D54:X54 tal cual. Ya trae la vecería
+# ADENTRO (años 12-20: 0,90 / 0,80 / 0,75 / 0,95 / 0,80 / 0,75 / 0,85 / 1 /
+# 1): se usa solo en el modo determinístico (`ParametrosMC.deterministico`),
+# que reproduce el Excel sin ninguna fuente estocástica.
+#
+# CURVA_PRODUCCION es la curva de maduración para Monte Carlo, donde la
+# vecería se simula aparte (`_simular_veceria()`): usar la curva del Excel
+# la contaría dos veces. Primera cosecha en el año siguiente al último
+# pre-productivo (Supuestos!B8 = 6 -> año 7), rampa del Excel en los años
+# 7-11, y desde el año 12 una meseta igual al promedio de la curva del
+# Excel en los años 12-20 (7,8 / 9 = 0,8667): así el rendimiento esperado
+# acumulado de la meseta coincide con el del Excel.
+ANIO_PRIMERA_COSECHA = int(_MODELO.supuestos["ultimo_anio_preproductivo"]) + 1
+ANIO_INICIO_MESETA = 12
+
+_CURVA_EXCEL = _MODELO.curva_excel(_MODELO.n_años)
+CURVA_EXCEL: dict[int, float] = {
+    año: float(_CURVA_EXCEL[año - 1]) for año in range(1, _MODELO.n_años + 1)
 }
+MESETA_PRODUCCION = float(_CURVA_EXCEL[ANIO_INICIO_MESETA - 1:].mean())
 CURVA_PRODUCCION: dict[int, float] = {
-    año: _CURVA_BASE.get(año, 1.00) for año in range(1, 21)
+    año: (
+        0.0 if año < ANIO_PRIMERA_COSECHA
+        else CURVA_EXCEL[año] if año < ANIO_INICIO_MESETA
+        else MESETA_PRODUCCION
+    )
+    for año in range(1, _MODELO.n_años + 1)
 }
 
 # Escenarios de precio (min, moda, max) en USD/kg — distribución triangular
@@ -267,18 +290,17 @@ def _muestrear_clima_correlacionado_antitetico(
 
 def _producto_esperado_factores() -> float:
     """
-    Producto de los valores esperados de los cuatro factores estocásticos de
-    `simulate_yields()` (frío, calor, vecería, supervivencia), bajo la
-    calibración por defecto. Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
+    Producto de los valores esperados de los factores estocásticos de
+    `simulate_yields()` que NO están normalizados a media 1 (frío, calor,
+    supervivencia), bajo la calibración por defecto. La vecería no entra:
+    desde la sincronización v2 su factor tiene media 1 por construcción
+    (ver `_media_veceria()`). Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
     partir de RENDIMIENTO_VALIDADO_KG_HA — ver el docstring de esa constante.
 
     Frío y calor: integración numérica de la función de transferencia
     correspondiente contra la densidad Normal calibrada (el ruido Beta
     posterior de `_muestrear_beta_por_media` no cambia la media, por
     construcción: E[Beta(m*k, (1-m)*k)] = m — no hace falta simularlo acá).
-
-    Vecería: probabilidad estacionaria de la cadena de Markov de 2 estados
-    (fórmula cerrada: pi_bajo = p_bajo_si_alto / (p_bajo_si_alto + p_alto_si_bajo)).
 
     Supervivencia: media de 1 - Beta(alpha, beta) = 1 - alpha / (alpha + beta).
     """
@@ -296,24 +318,20 @@ def _producto_esperado_factores() -> float:
         _CALOR_VERANO_MEDIA + 6 * _CALOR_VERANO_STD,
     )[0]
 
-    pi_bajo = _P_BAJO_SI_ALTO / (_P_BAJO_SI_ALTO + _P_ALTO_SI_BAJO)
-    factor_bajo_medio = (_VECERIA_FACTOR_MIN + _VECERIA_FACTOR_MAX) / 2
-    e_veceria = pi_bajo * factor_bajo_medio + (1 - pi_bajo) * 1.0
-
     e_supervivencia = 1.0 - _PLANTAS_ALPHA / (_PLANTAS_ALPHA + _PLANTAS_BETA)
 
-    return e_frio * e_calor * e_veceria * e_supervivencia
+    return e_frio * e_calor * e_supervivencia
 
 
 # Rendimiento IDEAL: constante de NORMALIZACIÓN derivada, no una afirmación
 # agronómica directa. Es el valor que hay que poner como techo de la curva
-# de maduración (curva_base) para que, después de multiplicar por los cuatro
-# factores estocásticos (frío, calor, vecería, supervivencia) en sus valores
-# esperados, el rendimiento resultante converja al dato real y validado
-# RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha, ver esa constante más arriba).
-# RENDIMIENTO_IDEAL_KG_HA nunca se observa en la práctica: requeriría que
-# los cuatro factores dieran 1.0 simultáneamente, lo cual no ocurre (vecería
-# y supervivencia son estructuralmente siempre < 1).
+# de maduración (curva_base) para que, después de multiplicar por los
+# factores estocásticos (frío, calor, supervivencia; la vecería tiene media
+# 1) en sus valores esperados, el rendimiento resultante converja al dato
+# del Excel RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha, ver esa constante más
+# arriba). RENDIMIENTO_IDEAL_KG_HA nunca se observa en la práctica:
+# requeriría que todos los factores dieran 1.0 simultáneamente (la
+# supervivencia es estructuralmente siempre < 1).
 RENDIMIENTO_IDEAL_KG_HA = RENDIMIENTO_VALIDADO_KG_HA / _producto_esperado_factores()
 
 
@@ -399,15 +417,42 @@ class ParametrosMC:
 # Funciones internas restantes
 # ---------------------------------------------------------------------------
 
+def _pi_bajo_estacionaria(params: ParametrosMC) -> float:
+    """Probabilidad estacionaria del estado "bajo" de la cadena de vecería."""
+    return params.p_bajo_si_alto / (params.p_bajo_si_alto + params.p_alto_si_bajo)
+
+
+def _media_veceria(params: ParametrosMC) -> float:
+    """
+    E[factor de vecería crudo] bajo la distribución estacionaria: los años
+    altos valen 1 y los bajos Uniforme(min, max). Se divide el factor crudo
+    por este valor para que la vecería tenga media 1 (desvío de media cero):
+    redistribuye la producción entre años sin cambiar el rendimiento
+    esperado, que ya fija la curva (la meseta de CURVA_PRODUCCION es el
+    promedio del Excel, que ya incluye años malos). La normalización usa los
+    `params` de la corrida, así que sigue valiendo cuando Sobol o el dataset
+    barren `p_bajo_si_alto` / `p_alto_si_bajo`: esos parámetros mueven la
+    VARIANZA del rendimiento, no su media.
+    """
+    pi_bajo = _pi_bajo_estacionaria(params)
+    factor_bajo_medio = (params.veceria_factor_min + params.veceria_factor_max) / 2
+    return pi_bajo * factor_bajo_medio + (1 - pi_bajo)
+
+
 def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
     Cadena de Markov binaria (año alto / año bajo) para modelar la alternancia.
 
-    Retorna array (n_simulaciones, n_años) con factores multiplicadores.
+    El estado del año 1 se sortea con la distribución ESTACIONARIA de la
+    cadena (no 50/50): así el factor tiene la misma media en todos los años
+    y la normalización por `_media_veceria()` da media 1 exacta en cada año.
+
+    Retorna array (n_simulaciones, n_años) con factores multiplicadores de
+    media 1.
     """
     n, T = params.n_simulaciones, params.n_años
     es_bajo = np.zeros((n, T), dtype=bool)
-    es_bajo[:, 0] = rng.random(n) < 0.5  # estado inicial aleatorio
+    es_bajo[:, 0] = rng.random(n) < _pi_bajo_estacionaria(params)
 
     for t in range(1, T):
         p_bajo = np.where(
@@ -422,7 +467,7 @@ def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarr
         params.veceria_factor_max,
         (n, T),
     )
-    return np.where(es_bajo, factores_bajos, 1.0)
+    return np.where(es_bajo, factores_bajos, 1.0) / _media_veceria(params)
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +535,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     u_magnitud = _generar_uniformes_antiteticos(n, (T,), rng)
 
     es_bajo = np.zeros((n, T), dtype=bool)
-    es_bajo[:, 0] = u_estado[:, 0] < 0.5
+    es_bajo[:, 0] = u_estado[:, 0] < _pi_bajo_estacionaria(params)
     for t in range(1, T):
         p_bajo = np.where(
             ~es_bajo[:, t - 1],
@@ -504,7 +549,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
         params.veceria_factor_min
         + (params.veceria_factor_max - params.veceria_factor_min) * u_magnitud
     )
-    factor_veceria = np.where(es_bajo, factores_bajos, 1.0)
+    factor_veceria = np.where(es_bajo, factores_bajos, 1.0) / _media_veceria(params)
 
     # --- Frío y calor: variables climáticas correlacionadas (cópula
     # gaussiana) o independientes; el ruido Beta sobre cada factor es
@@ -579,7 +624,7 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
 
     Combina cinco fuentes de variabilidad:
     1. Curva de maduración determinista (años 1–20)
-    2. Vecería (alternancia productiva) — cadena de Markov
+    2. Vecería (alternancia productiva) — cadena de Markov, media 1
     3. Déficit de horas de frío respecto a la media histórica real del sitio
        — media determinística + ruido Beta(media, precision_factor_frio)
     4. Déficit de calor estival (ene-feb) respecto a la media histórica real
