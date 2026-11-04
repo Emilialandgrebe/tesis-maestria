@@ -46,7 +46,11 @@ ESPACIO_PARAMETROS: dict[str, tuple[float, float]] = {
     "precision_factor_calor": (5.0, 30.0),
     "p_bajo_si_alto":         (0.50, 0.80),
     "p_alto_si_bajo":         (0.60, 0.90),
-    "precio_drift_anual":     (0.0, 0.025),  # incertidumbre del drift AR(1), ver plan
+    # Simétrico alrededor de 0: la trayectoria del Excel ya trae la
+    # tendencia real; un rango solo positivo (el anterior, 0-2,5%) sesgaba
+    # el precio hacia arriba. ±1,25% real anual cubre el drift estimado
+    # sobre la serie real (-0,15%) con margen para su incertidumbre.
+    "precio_drift_anual":     (-0.0125, 0.0125),
 }
 
 NOMBRES_PARAMETROS = list(ESPACIO_PARAMETROS.keys())
