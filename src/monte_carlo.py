@@ -417,6 +417,16 @@ class ParametrosMC:
     # recurrir a anchos "casi cero" que rng.triangular no acepta.
     capex_opex_estocastico: bool = True
 
+    # Modo determinístico COMPLETO: reproduce el Excel v2 sin ninguna fuente
+    # estocástica. Rendimiento = CURVA_EXCEL (vecería del Excel incluida) *
+    # RENDIMIENTO_VALIDADO_KG_HA, sin clima, vecería simulada ni falla de
+    # plantas; precio = trayectoria del Excel del `escenario` (ignora
+    # `modo_precio` y `precio_params`); multiplicador de OPEX = 1. Las
+    # `n_simulaciones` filas salen idénticas. Pensado para verificar el
+    # motor contra el Excel (tests/test_consistencia_excel.py), no para
+    # análisis de riesgo.
+    deterministico: bool = False
+
     semilla: int = 42
 
 
@@ -945,6 +955,24 @@ def simulate_opex_multiplicador_antitetico(
     return _triangular_ppf_o_constante(u, 1.0 - d, 1.0, 1.0 + d)
 
 
+def _componentes_deterministicos(
+    params: ParametrosMC,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    (yields, prices, capex_extra, opex_multiplicador) del modo determinístico
+    -- ver `ParametrosMC.deterministico`. No consume `rng`.
+    """
+    n, T = params.n_simulaciones, params.n_años
+    curva = np.array([CURVA_EXCEL[a] for a in range(1, T + 1)]) * RENDIMIENTO_VALIDADO_KG_HA
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, T)
+    return (
+        np.tile(curva, (n, 1)),
+        np.tile(trayectoria, (n, 1)),
+        np.zeros(n),
+        np.ones(n),
+    )
+
+
 def _resolver_params_costos(
     params: ParametrosMC | None, costos: ParametrosCostos | None
 ) -> tuple[ParametrosMC, ParametrosCostos]:
@@ -1063,6 +1091,9 @@ def run_monte_carlo(
         capex_extra_estocastico_usd
     """
     params, costos = _resolver_params_costos(params, costos)
+    if params.deterministico:
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
@@ -1096,6 +1127,9 @@ def run_monte_carlo_antitetico(
     estimador (la media), no el resultado esperado.
     """
     params, costos = _resolver_params_costos(params, costos)
+    if params.deterministico:
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields_antitetico(params, rng)
