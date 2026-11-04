@@ -90,11 +90,15 @@ CURVA_PRODUCCION: dict[int, float] = {
     for año in range(1, _MODELO.n_años + 1)
 }
 
-# Escenarios de precio (min, moda, max) en USD/kg — distribución triangular
+# Modo de precio "triangular" (comparación contra el modelo naive, sin
+# memoria): MULTIPLICADOR (min, moda, max) independiente por año sobre la
+# trayectoria de precio del Excel v2 del escenario. Los anchos relativos son
+# los de la triangular absoluta anterior al Excel v2 (pesimista 6/7/8,5,
+# base 8/9,5/11,5, optimista 11/13/15 USD/kg), divididos por su moda.
 ESCENARIOS_PRECIO: dict[str, tuple[float, float, float]] = {
-    "pesimista": (6.0,  7.0,  8.5),
-    "base":      (8.0,  9.5, 11.5),
-    "optimista": (11.0, 13.0, 15.0),
+    "pesimista": (6.0 / 7.0,  1.0,  8.5 / 7.0),
+    "base":      (8.0 / 9.5,  1.0, 11.5 / 9.5),
+    "optimista": (11.0 / 13.0, 1.0, 15.0 / 13.0),
 }
 
 
@@ -612,9 +616,10 @@ def simulate_prices_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     u = _generar_uniformes_antiteticos(params.n_simulaciones, (params.n_años,), rng)
     c = (mode - low) / (high - low)  # parámetro de forma de scipy.stats.triang
-    return triang_dist.ppf(u, c, loc=low, scale=high - low)
+    return trayectoria.reshape(1, -1) * triang_dist.ppf(u, c, loc=low, scale=high - low)
 
 
 # ---------------------------------------------------------------------------
@@ -709,14 +714,18 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
 
 def simulate_prices(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
-    Simula el precio de venta en USD/kg con distribución triangular.
+    Simula el precio de venta en USD/kg: trayectoria del Excel por un
+    multiplicador triangular independiente por año (ver ESCENARIOS_PRECIO).
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
-    return rng.triangular(low, mode, high, (params.n_simulaciones, params.n_años))
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    return trayectoria.reshape(1, -1) * rng.triangular(
+        low, mode, high, (params.n_simulaciones, params.n_años)
+    )
 
 
 def _despachar_precios(
