@@ -4,7 +4,7 @@ El precio simulado es la trayectoria base del Excel v2 (USD constantes 2026,
 por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
 logarítmico estocástico:
 
-    precio_t = trayectoria_t * exp(d_t),    d_t = r_1 + ... + r_t
+    precio_t = trayectoria_t * exp(d_t - Var[d_t] / 2),    d_t = r_1 + ... + r_t
 
 donde los r_t siguen un AR(1) sobre retornos log calibrado con datos reales
 del precio (FRED, serie WPU01190106, DEFLACTADA por CPI-U -- ver
@@ -14,9 +14,14 @@ unitaria (p=0.399), así que no hay sustento para reversión a un nivel de
 largo plazo. Es un ARIMA(1,1,0) sobre log(precio real).
 
 La tendencia la pone la trayectoria del Excel, no el AR(1): por eso el drift
-`c` vale 0 por defecto y el desvío tiene media cero en logaritmos (la
-MEDIANA del precio simulado es la trayectoria base; la media queda por
-encima en un factor exp(Var[d_t]/2), que crece con t). El desvío se acumula
+`c` vale 0 por defecto. Criterio de VALOR ESPERADO: la trayectoria del Excel
+es la MEDIA del precio simulado, no la mediana. Como d_t es normal,
+E[exp(d_t)] = exp(E[d_t] + Var[d_t]/2); restar Var[d_t]/2 (la varianza
+acumulada exacta bajo la dinámica del AR(1), ver `varianza_desvio_log()`)
+deja E[exp(d_t - Var[d_t]/2)] = 1 con c=0 en cada año. La mediana queda
+por debajo de la trayectoria en ese mismo factor. Con c != 0 el precio
+medio es trayectoria * exp(drift acumulado de c): el drift sigue siendo
+un desplazamiento deliberado de la media. El desvío se acumula
 desde el año 1 del proyecto, no desde la primera cosecha: la trayectoria es
 un pronóstico hecho hoy, y la incertidumbre sobre el precio del año 7
 incluye los 7 años que faltan para llegar.
@@ -53,15 +58,32 @@ class ParametrosPrecioAR1:
     sigma_eps: float = 0.140922
 
 
+def varianza_desvio_log(params: ParametrosPrecioAR1, n_años: int) -> np.ndarray:
+    """
+    Var[d_t] para t = 1..n_años, forma (n_años,), en forma cerrada.
+
+    La parte aleatoria de los retornos es e_t = phi * e_(t-1) + sigma * Z_t
+    con e_1 = sigma * Z_1, así que e_s = sigma * sum_(k<=s) phi^(s-k) Z_k y
+
+        d_t = sum_(s<=t) e_s = sigma * sum_(k<=t) Z_k (1 - phi^(t-k+1)) / (1 - phi)
+        Var[d_t] = sigma^2 / (1 - phi)^2 * sum_(j=1..t) (1 - phi^j)^2
+
+    El drift c no aporta varianza. Verificado contra la varianza muestral
+    de 400.000 trayectorias (coinciden al tercer decimal en los 20 años).
+    """
+    j = np.arange(1, n_años + 1)
+    return params.sigma_eps**2 / (1 - params.phi) ** 2 * np.cumsum((1 - params.phi**j) ** 2)
+
+
 def _simular_desvio_log(z: np.ndarray, params: ParametrosPrecioAR1) -> np.ndarray:
     """
-    Desvío logarítmico acumulado d_t a partir de choques normales `z`
-    (forma (n_simulaciones, n_años)):
+    Desvío logarítmico acumulado, con corrección de convexidad, a partir de
+    choques normales `z` (forma (n_simulaciones, n_años)):
 
         r_1 = c/(1-phi) + sigma_eps * Z_1          (arranca en el retorno de
                                                       largo plazo del AR(1))
         r_t = c + phi * r_(t-1) + sigma_eps * Z_t   (t = 2..n_años)
-        d_t = cumsum(r_1..r_t)
+        d_t = cumsum(r_1..r_t) - Var[d_t] / 2
     """
     n_simulaciones, n_años = z.shape
     retornos = np.empty((n_simulaciones, n_años))
@@ -70,7 +92,7 @@ def _simular_desvio_log(z: np.ndarray, params: ParametrosPrecioAR1) -> np.ndarra
         retornos[:, t] = (
             params.c + params.phi * retornos[:, t - 1] + params.sigma_eps * z[:, t]
         )
-    return np.cumsum(retornos, axis=1)
+    return np.cumsum(retornos, axis=1) - varianza_desvio_log(params, n_años).reshape(1, -1) / 2
 
 
 def _simular_precios_desde_normales(
