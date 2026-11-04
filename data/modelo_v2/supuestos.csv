@@ -1,0 +1,27 @@
+parametro,valor,unidad,fuente
+ultimo_anio_preproductivo,6.0,año,Supuestos!B8
+hectareas_referencia,120.0,ha,Supuestos!B11
+plantas_totales,45000.0,plantas,Supuestos!B16
+proporcion_machos,0.08,fracción,Supuestos!B17
+rendimiento_plena_kg_ha,3000.0,kg/ha,Supuestos!B20
+ha_por_sistema_solar,50.0,ha,Supuestos!B21
+salario_operario_usd_mes,850.0,USD/mes,Supuestos!B25
+salario_encargado_usd_mes,1400.0,USD/mes,Supuestos!B26
+cargas_patronales,0.35,fracción,Supuestos!B27
+aumento_real_salario,0.02,fracción/año,Supuestos!B28
+antiguedad_anual,0.01,fracción/año,Supuestos!B29
+operarios_anio1,5.0,personas,Supuestos!B30
+ha_por_operario,8.0,ha,Supuestos!B31
+anio_dotacion_plena,7.0,año,Supuestos!B33
+encargados,1.0,personas,Supuestos!B34
+tipo_cambio_ars_usd,1530.0,ARS/USD,Supuestos!B37
+alicuota_ganancias,0.25,fracción,Supuestos!B46
+alicuota_iibb,0.02,fracción de ventas,Supuestos!B47
+inflacion_eeuu,0.025,fracción/año,Supuestos!B48
+tasa_descuento_real,0.142305365853659,fracción/año,Supuestos!B49
+tasa_rf,0.0395,fracción/año,Tasa!B6
+prima_mercado,0.0423,fracción/año,Tasa!B7
+beta_desapalancada,0.81,-,Tasa!B8
+prima_riesgo_pais,0.0971,fracción/año,Tasa!B9
+prima_especifica,0.0,fracción/año,Tasa!B10
+wacc_nominal_usd,0.170863,fracción/año,Tasa!B20
