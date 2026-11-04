@@ -13,6 +13,14 @@ API_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 PARQUET_PATH = RAW_DIR / "precio_pistacho_fred.parquet"
 
+# CPI-U (todos los consumidores urbanos, EE.UU.), SIN ajuste estacional:
+# deflactor para pasar el índice de precio del pistacho a USD constantes.
+# Se usa la serie NSA (no CPIAUCSL) porque la serie anual de precio toma el
+# último mes reportado de cada año, y el deflactor tiene que ser el CPI de
+# ese mismo mes tal como se publicó.
+CPI_SERIE_ID = "CPIAUCNS"
+CPI_PARQUET_PATH = RAW_DIR / "cpi_u_fred.parquet"
+
 
 def fetch_price_data(
     serie_id: str = SERIE_ID,
@@ -53,6 +61,33 @@ def fetch_price_data(
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(PARQUET_PATH)
     print(f"Datos guardados en {PARQUET_PATH} ({len(df):,} filas)")
+
+    return df
+
+
+def fetch_cpi_data(max_reintentos: int = 3) -> pd.DataFrame:
+    """
+    Descarga el CPI-U mensual sin ajuste estacional (FRED CPIAUCNS).
+
+    Mismo esquema de cacheo que `fetch_price_data()`: si el parquet local
+    existe, lo carga sin llamar a la API.
+
+    Retorna
+    -------
+    pd.DataFrame
+        DataFrame con columnas `fecha` (datetime, mensual) y `cpi` (float).
+    """
+    if CPI_PARQUET_PATH.exists():
+        print(f"Cargando datos locales desde {CPI_PARQUET_PATH}")
+        return pd.read_parquet(CPI_PARQUET_PATH)
+
+    print(f"Descargando serie {CPI_SERIE_ID} desde FRED...")
+    respuesta = _get_con_reintentos(API_URL, {"id": CPI_SERIE_ID}, max_reintentos)
+    df = _parsear_respuesta(respuesta, CPI_SERIE_ID).rename(columns={"indice_precio": "cpi"})
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(CPI_PARQUET_PATH)
+    print(f"Datos guardados en {CPI_PARQUET_PATH} ({len(df):,} filas)")
 
     return df
 

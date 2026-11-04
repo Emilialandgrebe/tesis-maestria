@@ -1,19 +1,28 @@
-"""Simulación de precio del pistacho con memoria: AR(1) sobre retornos log.
+"""Simulación de precio del pistacho con memoria: AR(1) sobre retornos log reales.
 
-Reemplaza el supuesto de `simulate_prices()` (triangular independiente por año,
-sin memoria) por un proceso calibrado con datos reales del precio (FRED, serie
-WPU01190106). El AR(1) es sobre los RETORNOS logarítmicos, no sobre el nivel de
-precio: el ADF sobre el nivel no rechaza raíz unitaria (p=0.726), así que no hay
-sustento para modelar reversión a un nivel de precio de largo plazo (un
-Ornstein-Uhlenbeck sobre log(precio) no estaría respaldado por los datos). En
-la nomenclatura estándar de series de tiempo, esto es un ARIMA(1,1,0) con
-drift: el nivel de precio es I(1) (no estacionario), la diferenciación de
-orden 1 (retornos logarítmicos) lo estacionariza, y el AR(1) se ajusta sobre
-esa serie ya diferenciada. Ver `notebooks/04_calibracion_precio.ipynb` para
-el diagnóstico completo y `notas/plan_precio_historico.md` para la
-justificación epistemológica.
+El precio simulado es la trayectoria base del Excel v2 (USD constantes 2026,
+por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
+logarítmico estocástico:
 
-Integrado a `src/monte_carlo.py` vía `run_monte_carlo_precio_historico()`.
+    precio_t = trayectoria_t * exp(d_t),    d_t = r_1 + ... + r_t
+
+donde los r_t siguen un AR(1) sobre retornos log calibrado con datos reales
+del precio (FRED, serie WPU01190106, DEFLACTADA por CPI-U -- ver
+`src/data/price_features.py::deflactar_por_cpi`). El AR(1) es sobre los
+RETORNOS, no sobre el nivel: el ADF sobre el nivel real tampoco rechaza raíz
+unitaria (p=0.399), así que no hay sustento para reversión a un nivel de
+largo plazo. Es un ARIMA(1,1,0) sobre log(precio real).
+
+La tendencia la pone la trayectoria del Excel, no el AR(1): por eso el drift
+`c` vale 0 por defecto y el desvío tiene media cero en logaritmos (la
+MEDIANA del precio simulado es la trayectoria base; la media queda por
+encima en un factor exp(Var[d_t]/2), que crece con t). El desvío se acumula
+desde el año 1 del proyecto, no desde la primera cosecha: la trayectoria es
+un pronóstico hecho hoy, y la incertidumbre sobre el precio del año 7
+incluye los 7 años que faltan para llegar.
+
+Ver `notebooks/04_calibracion_precio.ipynb` para el diagnóstico de la serie
+nominal y `notas/plan_precio_historico.md` para la justificación del AR(1).
 """
 
 from __future__ import annotations
@@ -23,64 +32,54 @@ from typing import Literal
 
 import numpy as np
 
-# Precio de anclaje del año 1 (USD/kg) por escenario — misma moda que
-# ESCENARIOS_PRECIO en src/monte_carlo.py.
-PRECIO_ANCLA_POR_ESCENARIO: dict[str, float] = {
-    "pesimista": 7.0,
-    "base": 9.5,
-    "optimista": 13.0,
-}
+from src.modelo_v2 import cargar_modelo_v2
 
 
 @dataclass
 class ParametrosPrecioAR1:
-    """Parámetros del AR(1) sobre retornos log y del precio de anclaje."""
+    """Parámetros del AR(1) sobre retornos log reales y escenario de trayectoria."""
 
     escenario: Literal["pesimista", "base", "optimista"] = "base"
-    precio_ancla: float | None = None  # None -> tabla PRECIO_ANCLA_POR_ESCENARIO
-    # c=0.008 (no 0.031127, la estimación puntual sobre la serie completa
-    # 1991-2026): elección conservadora del drift, calibrada sobre la ventana
-    # reciente 2010-2026 en vez de la serie completa. El IC95% del drift con
-    # la serie completa es aprox. [-2%, +7%] — el parámetro no está
-    # identificado con precisión (N chico de datos anuales reales), así que
-    # usar la estimación puntual de la serie completa reclamaría más certeza
-    # de la que hay. phi y sigma_eps sí quedan calibrados con la serie
-    # completa: son estimaciones distintas, con distinta fuente de evidencia.
-    c: float = 0.008
-    phi: float = -0.265423
-    sigma_eps: float = 0.137358
-
-    def resolver_precio_ancla(self) -> float:
-        """Devuelve `precio_ancla` si fue fijado, o la tabla por escenario."""
-        if self.precio_ancla is not None:
-            return self.precio_ancla
-        return PRECIO_ANCLA_POR_ESCENARIO[self.escenario]
+    # Drift ADICIONAL sobre la trayectoria del Excel, en retorno log real
+    # anual. 0 por defecto: la estimación sobre la serie real 1991-2026 da
+    # c=-0.0015 (indistinguible de cero), y la tendencia ya está en la
+    # trayectoria base. `src/dataset_ml.py` lo barre como input.
+    c: float = 0.0
+    # Reestimados sobre la serie deflactada por CPI-U (2026-11-04, 1991-2026,
+    # n=34): phi=-0.217495 (p=0.218), sigma_eps=0.140922. Los valores
+    # anteriores, sobre la serie NOMINAL, eran phi=-0.265423 y
+    # sigma_eps=0.137358 (con c=0.031127 en la serie completa).
+    phi: float = -0.217495
+    sigma_eps: float = 0.140922
 
 
-def _simular_precios_desde_normales(
-    z: np.ndarray, params: ParametrosPrecioAR1
-) -> np.ndarray:
+def _simular_desvio_log(z: np.ndarray, params: ParametrosPrecioAR1) -> np.ndarray:
     """
-    Construye la trayectoria de precio a partir de choques normales `z`
+    Desvío logarítmico acumulado d_t a partir de choques normales `z`
     (forma (n_simulaciones, n_años)):
 
         r_1 = c/(1-phi) + sigma_eps * Z_1          (arranca en el retorno de
                                                       largo plazo del AR(1))
         r_t = c + phi * r_(t-1) + sigma_eps * Z_t   (t = 2..n_años)
-        log(precio_t) = log(precio_ancla) + cumsum(r_1..r_t)
+        d_t = cumsum(r_1..r_t)
     """
     n_simulaciones, n_años = z.shape
-    precio_ancla = params.resolver_precio_ancla()
-
     retornos = np.empty((n_simulaciones, n_años))
     retornos[:, 0] = params.c / (1 - params.phi) + params.sigma_eps * z[:, 0]
     for t in range(1, n_años):
         retornos[:, t] = (
             params.c + params.phi * retornos[:, t - 1] + params.sigma_eps * z[:, t]
         )
+    return np.cumsum(retornos, axis=1)
 
-    log_precio = np.log(precio_ancla) + np.cumsum(retornos, axis=1)
-    return np.exp(log_precio)
+
+def _simular_precios_desde_normales(
+    z: np.ndarray, params: ParametrosPrecioAR1
+) -> np.ndarray:
+    """Trayectoria base del escenario (1, n_años) * exp(desvío) (n, n_años)."""
+    n_años = z.shape[1]
+    trayectoria = cargar_modelo_v2().trayectoria_precio(params.escenario, n_años)
+    return trayectoria.reshape(1, -1) * np.exp(_simular_desvio_log(z, params))
 
 
 def _generar_normales_antiteticos(
@@ -112,7 +111,8 @@ def simulate_prices_ar1(
     rng: np.random.Generator,
 ) -> np.ndarray:
     """
-    Simula el precio de venta en USD/kg con un AR(1) sobre retornos log.
+    Simula el precio de venta en USD/kg (USD constantes 2026): trayectoria
+    base del escenario por un desvío log AR(1) sobre retornos reales.
 
     Retorna
     -------
