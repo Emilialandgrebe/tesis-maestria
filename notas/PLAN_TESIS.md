@@ -767,9 +767,47 @@ CSV, nunca el .xlsx). `data/external/` pasó a `data/historico/` sin cambios.
   el límite del clip (TIR = 1000%) marcadas como convergidas.
 - **Rangos de Sobol y dataset**: tasa 10-18%, hectáreas 60-180.
 
-Pendiente (Paso 3): regenerar `sobol_indices*.parquet`, el dataset ML y
-los surrogates — todo lo que hay en `data/processed/` es anterior a esta
-fase.
+**Derivados regenerados** (2026-11-04, después de la corrección de
+convexidad del precio y del drift simétrico ±1,25% en el dataset; Sobol
+con n_base=128 y 1.000 simulaciones por evaluación, dataset 800+200 puntos
+LHS por escenario):
+
+Sobol, índice total ST (ranking igual en los tres escenarios y en las dos
+métricas: tasa > hectáreas > capex_extra_pct > resto ≈ 0):
+
+| Parámetro | VAN medio pes. / base / opt. | P(VAN<0) pes. / base / opt. |
+|---|---|---|
+| tasa_descuento | 0,762 / 0,924 / 0,802 | 0,864 / 0,889 / 0,881 |
+| hectareas | 0,241 / 0,092 / 0,206 | 0,090 / 0,092 / 0,105 |
+| capex_extra_pct | 0,096 / 0,042 / 0,017 | 0,038 / 0,033 / 0,036 |
+| p_bajo_si_alto | 0,000 / 0,000 / 0,000 | 0,001 / 0,000 / 0,000 |
+| precision_factor_frio/calor | 0,000 | 0,000 |
+
+Antes (tasa 5-12%, 50-100 ha, motor previo a la Fase C), la tasa daba
+ST 0,83-0,93 sobre el VAN medio y 0,92-0,94 sobre P(VAN<0); hectáreas
+pesaba 0 en riesgo y ahora pesa ~0,09 (con costos fijos y un sistema solar
+cada 50 ha, la superficie ya no escala todo en proporción).
+
+**La vecería pesa ~0 también en el Sobol de riesgo.** No es un artefacto
+de Sobol: a 120 ha, escenario base y 10.000 simulaciones, pasar
+`p_bajo_si_alto` de 0,5 a 0,8 cambia el desvío del VAN en 0,3% y
+P(VAN<0) en 0,1 punto; apagar la vecería del todo lo baja menos de 1%. Con
+media 1, la vecería es una alternancia año a año que se cancela dentro de
+los 14 años productivos; la dispersión del VAN la domina el precio (con
+sigma_eps ≈ 0 el desvío del VAN cae de 2,0 M a 0,43 M). Si la tesis quiere
+que la vecería tenga peso, tendría que modelarse como un shock persistente
+(p. ej. falla de cuaje de varios años), no como alternancia.
+
+Surrogates (R² en test, LHS independiente):
+
+| Target | RF antes | RF después | LightGBM antes | LightGBM después |
+|---|---|---|---|---|
+| `van_neto_medio_usd` | 0,9861 | 0,9862 | 0,9926 | 0,9943 |
+| `prob_van_negativo` | 0,9913 | 0,9834 | 0,9953 | 0,9929 |
+
+P(VAN<0) del escenario base a 120 ha y 14,23% real: **61,8%** (10.000
+simulaciones, OPEX estocástico activado; VAN medio −205.034, mediana
+−561.744).
 
 ## Problemas abiertos
 
