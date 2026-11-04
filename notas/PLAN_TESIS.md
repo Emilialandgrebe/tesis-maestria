@@ -695,9 +695,52 @@ tocar `sensibilidad.py` ni `dataset_ml.py` todavía):
   ambos retirados). Sigue siendo útil como referencia histórica (documentado
   en `data/external/README.md`), no se borró.
 
+### Fase C: motor sincronizado con el modelo financiero v2 (Excel) — rama `sync-modelo-v2`
+
+Hecho el 2026-11-04. Fuente única de costos:
+`data/referencia/Modelo financiero - Pistacho Mendoza v2.xlsx`, exportado a
+`data/modelo_v2/` por `scripts/importar_modelo_v2.py` (el motor lee los
+CSV, nunca el .xlsx). `data/external/` pasó a `data/historico/` sin cambios.
+
+- **Costos** (`src/costos.py`, reescrito): CAPEX USD 2.224.279 a 120 ha
+  (+975.197 respecto de Fase B: riego por goteo, sistema solar, subsolado,
+  tutores, reservorio), con escala por ha / por planta / ROUNDUP de
+  sistemas solares, amortización por vida útil, personal con dotación y
+  salarios reales de la hoja Personal, OPEX con etapa y rampa de
+  fertilización años 1-6, maquila 0,40 USD/kg, IIBB 2% de ventas,
+  Ganancias 25% sin traslado de quebrantos y valor residual de la tierra
+  en el año 20. Sin servicio de deuda (proyecto sin financiamiento). Esto
+  también resuelve la separación fijo/escala que pedía la auditoría de
+  escalado lineal de Fase B.
+- **Tasa**: 14,23% real por defecto (hoja Tasa: CAPM + riesgo país,
+  17,09% nominal, Fisher con 2,5%). Flujos en USD constantes 2026.
+- **Precio**: AR(1) reestimado sobre FRED WPU01190106 deflactado por CPI-U
+  (CPIAUCNS): phi −0,2654 → −0,2175, sigma_eps 0,1374 → 0,1409, drift real
+  −0,0015 (≈0). Se aplica como desvío log de media cero alrededor de la
+  trayectoria base del Excel (la mediana del precio simulado es la
+  trayectoria; la media queda ~5-14% arriba por la convexidad de exp).
+- **Rendimiento**: curva de Monte Carlo con primera cosecha en el año 7,
+  rampa del Excel años 7-11 y meseta 0,8667 desde el año 12; vecería
+  normalizada a media 1 (sin esto los años malos se contaban dos veces).
+- **Modo determinístico** (`ParametrosMC.deterministico=True`): reproduce
+  el Excel exacto — VAN −240.830,30 y TIR real 13,5699%.
+  `tests/test_consistencia_excel.py` lo verifica (tolerancia 1%).
+- **Bug corregido** en `_tir_vectorizada()`: filas divergentes quedaban en
+  el límite del clip (TIR = 1000%) marcadas como convergidas.
+- **Rangos de Sobol y dataset**: tasa 10-18%, hectáreas 60-180.
+
+Pendiente (Paso 3): regenerar `sobol_indices*.parquet`, el dataset ML y
+los surrogates — todo lo que hay en `data/processed/` es anterior a esta
+fase.
+
 ## Problemas abiertos
 
 ### ⚠️ EL CAPEX ESTÁ INCOMPLETO — faltan Red antigranizo y Paneles solares — el VAN/P(VAN<0) actuales NO son el número final
+
+**Superado por la Fase C (2026-11-04):** el CAPEX del Excel v2 ya incluye
+el sistema solar de bombeo (USD 384.625) y deja la red antigranizo en 0 por
+decisión explícita ("no incluida en Fase I"). Se conserva la entrada como
+historia.
 
 Vigente desde 2026-09-24 (Fase B, resincronización del CAPEX a 120 ha —
 ver "Resuelto" más arriba para el detalle completo). Dos ítems de
