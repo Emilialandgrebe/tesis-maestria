@@ -715,10 +715,48 @@ CSV, nunca el .xlsx). `data/external/` pasó a `data/historico/` sin cambios.
 - **Tasa**: 14,23% real por defecto (hoja Tasa: CAPM + riesgo país,
   17,09% nominal, Fisher con 2,5%). Flujos en USD constantes 2026.
 - **Precio**: AR(1) reestimado sobre FRED WPU01190106 deflactado por CPI-U
-  (CPIAUCNS): phi −0,2654 → −0,2175, sigma_eps 0,1374 → 0,1409, drift real
-  −0,0015 (≈0). Se aplica como desvío log de media cero alrededor de la
-  trayectoria base del Excel (la mediana del precio simulado es la
-  trayectoria; la media queda ~5-14% arriba por la convexidad de exp).
+  (CPIAUCNS, sin ajuste estacional, deflactado mes a mes antes de
+  anualizar): phi −0,2654 → −0,2175, sigma_eps 0,1374 → 0,1409, drift real
+  −0,0015 (≈0). Se aplica como desvío log alrededor de la trayectoria base
+  del Excel. Tres decisiones a defender:
+  - **phi no es significativo** (p = 0,22 con n = 34; en la serie nominal
+    era p = 0,13). Se mantiene igual que antes por el mismo argumento de
+    `notas/plan_precio_historico.md`: con N chico la falta de significancia
+    no descarta la autocorrelación, y un phi negativo de esta magnitud pesa
+    por composición a 20 años. Con phi = 0 la varianza del desvío al año 20
+    sería ~0,40 en vez de 0,27 (phi < 0 amortigua la acumulación), así que
+    fijarlo en 0 no es la opción conservadora "neutral": cambia el ancho de
+    la distribución del VAN. Pendiente para la tesis: correr la sensibilidad
+    del VAN a phi = 0 como análisis de robustez.
+  - **CPI de octubre de 2025 interpolado.** El BLS no publicó el CPI-U de
+    oct-2025 (cierre del gobierno federal de EE.UU.). `deflactar_por_cpi()`
+    completa huecos internos por interpolación lineal en log(CPI) entre
+    sep-2025 y nov-2025 (equivale a la media geométrica). El índice de
+    pistacho sí tiene dato en oct-2025 y sin esto no se podía deflactar ese
+    mes; no se extrapola fuera del rango del CPI.
+  - **Criterio de valor esperado.** La trayectoria del Excel es la MEDIA
+    del precio simulado, no la mediana: al desvío d_t se le resta
+    Var[d_t]/2, con Var[d_t] = sigma² / (1−phi)² · Σ_{j≤t} (1−phi^j)²
+    (forma cerrada de la varianza acumulada del AR(1) sobre retornos,
+    `varianza_desvio_log()`), de modo que E[exp(d_t − Var/2)] = 1 en cada
+    año. `tests/test_precio.py` lo verifica (±1% con 10.000 simulaciones
+    antitéticas). Consecuencia: la mediana del precio queda por debajo de
+    la trayectoria (factor exp(−Var/2): −1% en el año 1, −13% en el 20).
+    Motivo: el Excel es un pronóstico puntual que se usa para el VAN
+    determinístico; para que E[VAN] de Monte Carlo sea comparable con ese
+    VAN, el precio esperado tiene que coincidir con el del Excel. Sin la
+    corrección, el VAN medio del base daba +0,25 M contra −0,24 M del Excel.
+- **VAN medio de Monte Carlo vs. determinístico** (10.000 simulaciones,
+  tasa 14,23%, después de la corrección de convexidad): base −205.034
+  contra −240.830 (+35.797). Descomposición: +30.919 por el momento de la
+  vecería (el Excel tiene años bajo la meseta en 13, 14, 16, 17 y 18 y
+  los dos mejores, 1,0, al final, en 19 y 20; la meseta reparte la misma
+  producción total sin descontar pero adelanta kilos, y eso da más VAN
+  descontado), −13.293 por la convexidad de Ganancias (max(0, EBIT) sin
+  traslado de quebrantos: los años con pérdida no devuelven impuesto, así
+  que la varianza baja la media del flujo), y +18.170 de residuo
+  compatible con ruido de muestreo (IC95% ±39.154). Pesimista y
+  optimista: misma estructura (+21k/−15k y +39k/−8k).
 - **Rendimiento**: curva de Monte Carlo con primera cosecha en el año 7,
   rampa del Excel años 7-11 y meseta 0,8667 desde el año 12; vecería
   normalizada a media 1 (sin esto los años malos se contaban dos veces).
