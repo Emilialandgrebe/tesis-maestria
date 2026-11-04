@@ -384,9 +384,12 @@ class ParametrosMC:
     plantas_alpha: float = _PLANTAS_ALPHA
     plantas_beta: float = _PLANTAS_BETA
 
-    # Escenario de precio y tasa de descuento para VAN
+    # Escenario de precio y tasa de descuento para VAN. La tasa es REAL en
+    # USD (hoja Tasa del Excel v2: CAPM + riesgo país de Damodaran = 17,09%
+    # nominal, pasado a real con Fisher contra 2,5% de inflación de EE.UU.),
+    # coherente con flujos en USD constantes de 2026.
     escenario: Literal["pesimista", "base", "optimista"] = "base"
-    tasa_descuento: float = 0.08
+    tasa_descuento: float = _MODELO.supuestos["tasa_descuento_real"]
 
     # Generador de precio: "ar1" (AR(1) sobre retornos log, calibrado con
     # datos reales de FRED -- src/precio_estocastico.py) o "triangular"

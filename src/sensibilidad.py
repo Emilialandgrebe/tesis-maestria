@@ -20,10 +20,10 @@ from SALib.sample import sobol as sobol_sample
 from src.costos import ParametrosCostos
 from src.monte_carlo import ParametrosMC, resumen_financiero, run_monte_carlo_antitetico
 
-# Rango de hectareas [50, 100]: Fase II del plan de negocio real (la hoja
-# "Financiamiento" de data/external/ menciona ampliación a 50 ha sobre los
-# 100 ha de tierra comprada). No depende de ningún módulo de dataset
-# sintético.
+# Rangos (sincronización con el Excel v2, 2026-11):
+# - tasa_descuento [0.10, 0.18]: tasa REAL en USD, alrededor del 14,23% del
+#   Excel (hoja Tasa); el rango anterior [0.05, 0.12] dejaba esa tasa afuera.
+# - hectareas [60, 180]: la mitad y 1,5 veces las 120 ha del plan v2.
 PROBLEMA_SOBOL: dict = {
     "num_vars": 6,
     "names": [
@@ -35,12 +35,12 @@ PROBLEMA_SOBOL: dict = {
         "hectareas",
     ],
     "bounds": [
-        [0.05, 0.12],
+        [0.10, 0.18],
         [5.0, 30.0],
         [5.0, 30.0],
         [0.50, 0.80],
         [0.0, 0.30],
-        [50.0, 100.0],
+        [60.0, 180.0],
     ],
 }
 

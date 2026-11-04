@@ -127,12 +127,13 @@ with st.sidebar:
     st.header("Parámetros")
 
     hectareas = st.slider(
-        "Hectáreas", min_value=5, max_value=300, value=50, step=5,
+        "Hectáreas", min_value=5, max_value=300, value=120, step=5,
         help=(
-            "Superficie del proyecto. Escala lineal de CAPEX/OPEX/ingresos "
-            "(sin economías de escala). Nota: el modelo ML surrogate y el "
-            "Sobol pre-calculado sólo cubren hasta 100 ha; el motor simula "
-            "cualquier superficie sin problema."
+            "Superficie del proyecto. CAPEX/OPEX escalan con las reglas del "
+            "Excel v2 (por hectárea, por planta, 1 sistema solar cada 50 ha, "
+            "1 operario cada 8 ha). Nota: el modelo ML surrogate y el Sobol "
+            "pre-calculado cubren 60-180 ha; el motor simula cualquier "
+            "superficie sin problema."
         ),
     )
 
@@ -163,8 +164,8 @@ with st.sidebar:
     )
 
     tasa_descuento = st.slider(
-        "Tasa de descuento", min_value=0.02, max_value=0.20, value=0.08, step=0.005,
-        format="%.3f",
+        "Tasa de descuento real", min_value=0.02, max_value=0.25, value=0.1423, step=0.0025,
+        format="%.4f",
         help="Variable dominante en el análisis de Sobol (S_T ≈ 0,86–0,92).",
     )
 

@@ -33,14 +33,14 @@ from src.precio_estocastico import ParametrosPrecioAR1
 # Espacio de parámetros
 # ---------------------------------------------------------------------------
 
-# Mismo criterio que PROBLEMA_SOBOL en src/sensibilidad.py, con dos cambios:
-# - hectareas: piso bajado de 50 a 25 para cubrir también la escala actual
-#   del proyecto (Fase I), no solo la ampliación a Fase II.
-# - p_alto_si_bajo: agregado (Sobol lo dejaba fijo en 0.80); acá no hay
-#   costo adicional en barrerlo también.
+# Mismos rangos que PROBLEMA_SOBOL en src/sensibilidad.py (tasa real
+# 10-18%, 60-180 ha), más dos parámetros que Sobol deja fijos:
+# - p_alto_si_bajo: acá no hay costo adicional en barrerlo también.
+# - precio_drift_anual: drift real ADICIONAL sobre la trayectoria de precio
+#   del Excel (ver ParametrosPrecioAR1.c en src/precio_estocastico.py).
 ESPACIO_PARAMETROS: dict[str, tuple[float, float]] = {
-    "tasa_descuento":         (0.05, 0.12),
-    "hectareas":              (25.0, 100.0),
+    "tasa_descuento":         (0.10, 0.18),
+    "hectareas":              (60.0, 180.0),
     "capex_extra_pct":        (0.0, 0.30),
     "precision_factor_frio":  (5.0, 30.0),
     "precision_factor_calor": (5.0, 30.0),
