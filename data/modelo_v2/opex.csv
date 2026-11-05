@@ -1,0 +1,30 @@
+categoria,item,unidad,cantidad,precio_unit_usd,costo_anual_usd,moneda_pago,aplica_en,rampa,estado,fuente,tipo,escala
+Personal,Encargado y operarios (hoja Personal),año,0.0,0.0,0.0,ARS,Todos,False,Validado,F15,personal,fijo
+Fertilización,Nitrógeno (urea 46%),kg,26160.0,0.739,19332.24,USD,Todos,True,Cotizado,F14,fijo_anual,ha
+Fertilización,Fósforo + potasio,kg,13080.0,1.21,15826.8,USD,Todos,True,Cotizado,F14,fijo_anual,ha
+Fertilización,Micronutrientes y foliares,kg,24000.0,0.683,16392.0,USD,Todos,True,Cotizado,F14,fijo_anual,ha
+Fitosanidad,Fungicidas,ha,120.0,484.0,58080.0,USD,Todos,True,A confirmar,F22,fijo_anual,ha
+Fitosanidad,"Insecticidas, acaricidas y aceites",ha,120.0,387.0,46440.0,USD,Todos,True,A confirmar,F22,fijo_anual,ha
+Fitosanidad,Herbicidas,ha,120.0,150.0,18000.0,USD,Todos,False,A confirmar,F22,fijo_anual,ha
+Combustible y energía,Gasoil tractor y maquinaria (240 l/ha),litro,28800.0,1.1,31680.0,ARS,Todos,False,A confirmar,F22,fijo_anual,ha
+Combustible y energía,"Energía de bombeo (sistema solar aislado, sin red)",kWh,0.0,0.0,0.0,ARS,Todos,False,Cotizado,F09,fijo_anual,fijo
+Cosecha y procesado,Cosecha mecánica (incluye traslado a planta),ha,120.0,500.0,60000.0,ARS,Prod,False,Cotizado,F16,fijo_anual,ha
+Cosecha y procesado,Maquila de descascarado y secado,USD/kg,0.0,0.4,0.0,ARS,Prod,False,A confirmar,F17,por_kg,fijo
+Mantenimiento,Mantenimiento de maquinaria y riego,ha,120.0,212.0,25440.0,ARS,Todos,False,A confirmar,F22,fijo_anual,ha
+Mantenimiento,Reposición de plantas fallidas (5%),planta,2070.0,9.0,18630.0,USD,Año 1,False,Estimado,F07,fijo_anual,ha
+Mantenimiento,Renovación de plantas (1%/año),planta,450.0,9.0,4050.0,USD,Prod,False,A confirmar,F22,fijo_anual,ha
+Mantenimiento,Material de poda,operario,5.0,30.0,150.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Mantenimiento,Mantenimiento de vehículos,servicio,6.0,130.0,780.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Asesoramiento,Asesor agronómico,ha,120.0,117.0,14040.0,ARS,Todos,False,A confirmar,F22,fijo_anual,ha
+Asesoramiento,"Estudio contable, impositivo y laboral",mes,12.0,588.235294117647,7058.82352941177,ARS,Todos,False,Cotizado,F13,fijo_anual,fijo
+Administración,Internet satelital,mes,12.0,40.0,480.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Administración,Alarma y monitoreo,mes,12.0,45.0,540.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Administración,Seguros finca y maquinaria (etapa pre-productiva),año,1.0,2200.0,2200.0,ARS,Pre,False,Estimado,,fijo_anual,fijo
+Administración,"Seguros finca, maquinaria y cosecha (etapa productiva)",año,1.0,6000.0,6000.0,ARS,Prod,False,Estimado,,fijo_anual,fijo
+Administración,"Seguro agrícola (Fondo Compensador, granizo y helada)",ha,120.0,122.549019607843,14705.8823529412,ARS,Todos,False,A confirmar,F25,fijo_anual,ha
+Administración,Impuestos y tasas fijos,año,1.0,350.0,350.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Administración,Impuesto automotor (2 vehículos),bimestre,12.0,46.0,552.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Administración,Seguros de vehículos (2),mes,24.0,46.0,1104.0,ARS,Todos,False,Estimado,,fijo_anual,fijo
+Comercial,Marketing y e-commerce,mes,0.0,0.0,0.0,ARS,Prod,False,Estimado,,fijo_anual,fijo
+Comercial,Certificaciones (orgánico / BPA),año,0.0,0.0,0.0,ARS,Prod,False,Estimado,,fijo_anual,fijo
+Impuestos,Ingresos Brutos (% de ventas),% ventas,0.02,0.0,0.0,ARS,Todos,False,Estimado,,pct_ventas,fijo

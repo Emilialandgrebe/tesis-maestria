@@ -4,7 +4,7 @@ No usa un dataset sintético ni Hipercubo Latino: cada punto de la muestra de
 Sobol corre una simulación completa (`run_monte_carlo_antitetico` +
 `resumen_financiero`) con esos parámetros. El precio usa `modo_precio="ar1"`
 explícito (ver `_evaluar_metrica`) -- el modelo AR(1) calibrado con datos
-reales de FRED, no el triangular naive.
+reales de FRED (en niveles, la especificación principal), no el triangular naive.
 """
 
 from __future__ import annotations
@@ -19,13 +19,23 @@ from SALib.sample import sobol as sobol_sample
 
 from src.costos import ParametrosCostos
 from src.monte_carlo import ParametrosMC, resumen_financiero, run_monte_carlo_antitetico
+from src.precio_estocastico import ParametrosPrecioAR1
 
-# Rango de hectareas [50, 100]: Fase II del plan de negocio real (la hoja
-# "Financiamiento" de data/external/ menciona ampliación a 50 ha sobre los
-# 100 ha de tierra comprada). No depende de ningún módulo de dataset
-# sintético.
+# Rangos (sincronización con el Excel v2, 2026-11):
+# - tasa_descuento [0.10, 0.18]: tasa REAL en USD, alrededor del 14,23% del
+#   Excel (hoja Tasa); el rango anterior [0.05, 0.12] dejaba esa tasa afuera.
+# - hectareas [60, 180]: la mitad y 1,5 veces las 120 ha del plan v2.
+# - precio_drift_anual [-0.0125, 0.0125]: drift real ADICIONAL del AR(1)
+#   sobre la trayectoria del Excel (ParametrosPrecioAR1.c), mismo rango que
+#   src/dataset_ml.py. Es un supuesto incierto (el drift estimado sobre la
+#   serie real, -0,15% anual, no es distinguible de cero), no ruido dentro
+#   de la simulación, así que entra a Sobol como el resto.
+# - precio_nivel_mult [0.8, 1.2]: multiplica TODA la trayectoria base de
+#   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
+#   del precio, que la sensibilidad al precio plano mostró que es lo que más
+#   mueve P(VAN<0) (ver notas/PLAN_TESIS.md).
 PROBLEMA_SOBOL: dict = {
-    "num_vars": 6,
+    "num_vars": 8,
     "names": [
         "tasa_descuento",
         "precision_factor_frio",
@@ -33,14 +43,18 @@ PROBLEMA_SOBOL: dict = {
         "p_bajo_si_alto",
         "capex_extra_pct",
         "hectareas",
+        "precio_drift_anual",
+        "precio_nivel_mult",
     ],
     "bounds": [
-        [0.05, 0.12],
+        [0.10, 0.18],
         [5.0, 30.0],
         [5.0, 30.0],
         [0.50, 0.80],
         [0.0, 0.30],
-        [50.0, 100.0],
+        [60.0, 180.0],
+        [-0.0125, 0.0125],
+        [0.8, 1.2],
     ],
 }
 
@@ -56,7 +70,7 @@ def _evaluar_metrica(
     metrica: str = "van_neto_medio_usd",
 ) -> float:
     """
-    Corre una simulación completa con los 6 parámetros de `fila` (mismo
+    Corre una simulación completa con los 8 parámetros de `fila` (mismo
     orden que PROBLEMA_SOBOL["names"]) y devuelve el output escalar que
     analiza Sobol.
 
@@ -68,10 +82,10 @@ def _evaluar_metrica(
       de simulaciones con VAN negativo, una pregunta de RIESGO distinta de
       "cuánto VAN se espera en promedio".
 
-    `capex_extra_pct` no es un campo de ParametrosCostos (no se modifica
-    src/costos.py): se aplica acá como un recargo sobre `capex_inicial_ha`,
-    representando la incertidumbre de los ítems de CAPEX sin cotizar
-    (riego, pozo, represa, paneles — ver data/external/README.md).
+    `capex_extra_pct` se pasa como `ParametrosCostos.capex_factor`
+    (1 + pct), un recargo sobre todo el CAPEX que representa la
+    incertidumbre de los ítems "A confirmar" del Excel v2 (riego por goteo,
+    subsolado, tutores, reservorio -- ver data/modelo_v2/capex.csv).
 
     La semilla se mantiene FIJA en todas las evaluaciones (no varía con
     `fila`): así la única fuente de variación en el output es el barrido de
@@ -90,6 +104,8 @@ def _evaluar_metrica(
         p_bajo_si_alto,
         capex_extra_pct,
         hectareas,
+        precio_drift_anual,
+        precio_nivel_mult,
     ) = fila
 
     params = ParametrosMC(
@@ -101,7 +117,7 @@ def _evaluar_metrica(
         p_bajo_si_alto=p_bajo_si_alto,
         escenario=escenario,
         semilla=semilla,
-        # Explícitas en False: Sobol descompone la varianza atribuible a las 6
+        # Explícitas en False: Sobol descompone la varianza atribuible a las 8
         # variables de PROBLEMA_SOBOL, no al ruido de CAPEX/OPEX estocástico ni
         # a la correlación frío/calor (Fases 1-2 del motor), que no son
         # variables analizadas acá. Sin esto se heredaría el default del motor
@@ -119,10 +135,13 @@ def _evaluar_metrica(
         # y Sobol debe analizar el simulador "oficial", no el modelo naive.
         modo_precio="ar1",
     )
-    costos = ParametrosCostos(hectareas=hectareas)
-    costos.capex_inicial_ha *= 1.0 + capex_extra_pct
+    costos = ParametrosCostos(hectareas=hectareas, capex_factor=1.0 + capex_extra_pct)
 
-    df = run_monte_carlo_antitetico(params, costos)
+    precio_params = ParametrosPrecioAR1(
+        escenario=escenario, c=precio_drift_anual, nivel_mult=precio_nivel_mult
+    )
+
+    df = run_monte_carlo_antitetico(params, costos, precio_params)
     resumen = resumen_financiero(df, costos)
 
     if metrica == "van_neto_medio_usd":
@@ -147,7 +166,7 @@ def analizar_sensibilidad_sobol(
 
     Se usa `calc_second_order=False` porque solo hacen falta S1 y ST: el
     muestreo de Saltelli requiere entonces N * (D + 2) evaluaciones del
-    modelo (D=6 variables), en vez de N * (2D + 2) si también se pidieran
+    modelo (D=8 variables), en vez de N * (2D + 2) si también se pidieran
     los índices de segundo orden.
 
     Parámetros
@@ -156,9 +175,9 @@ def analizar_sensibilidad_sobol(
         "pesimista", "base" u "optimista".
     n_base : int
         Tamaño base de la muestra de Sobol (N). Total de evaluaciones del
-        modelo = n_base * (6 + 2) = n_base * 8. Calibrado empíricamente:
+        modelo = n_base * (8 + 2) = n_base * 10. Calibrado empíricamente:
         cada evaluación con n_simulaciones=1.000 tarda ~0.2s, así que
-        n_base=128 (1.024 evaluaciones/escenario) da ~11-17 minutos en
+        n_base=128 (1.280 evaluaciones/escenario) da ~13-21 minutos en
         total para los 3 escenarios (medido en corridas reales); n_base=256
         ya sube a ~21 minutos.
     n_simulaciones : int
@@ -184,7 +203,7 @@ def analizar_sensibilidad_sobol(
         PROBLEMA_SOBOL, n_base, calc_second_order=False, seed=semilla
     )
     total = muestra.shape[0]
-    print(f"[{escenario}/{metrica}] {total} evaluaciones del modelo (N={n_base} x 8)...")
+    print(f"[{escenario}/{metrica}] {total} evaluaciones del modelo (N={n_base} x {PROBLEMA_SOBOL['num_vars'] + 2})...")
 
     outputs = np.empty(total)
     inicio = time.time()

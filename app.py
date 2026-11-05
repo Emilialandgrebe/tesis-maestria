@@ -5,7 +5,7 @@ Fase 4. Esta app es SOLO consumidora del motor (`src/monte_carlo.py`,
 
 Secciones:
 - Distribución del VAN al año 20 (histograma + métricas).
-- Trayectoria por año (fan charts P10/P50/P90 de producción, ingreso y VAN).
+- Trayectoria por año (fan charts P10/P50/P90 de producción, precio, ingreso y VAN).
 - Sensibilidad de Sobol (tornado de ST, pre-calculado en
   `data/processed/sobol_indices.parquet` -- NO se recalcula en vivo).
 - Comparación de los tres escenarios de precio a los parámetros del sidebar.
@@ -31,11 +31,24 @@ if str(_RAIZ) not in sys.path:
 
 from src.costos import ParametrosCostos  # noqa: E402
 from src.monte_carlo import ParametrosMC, resumen_financiero, run_monte_carlo  # noqa: E402
+from src.modelo_v2 import cargar_modelo_v2  # noqa: E402
+from src.precio_estocastico import precio_retornos_estres  # noqa: E402
 
 SEMILLA = 42  # fija, igual que el default del motor (reproducibilidad)
 ESCENARIOS = ["pesimista", "base", "optimista"]
 COLOR_ESCENARIO = {"pesimista": "#C44E52", "base": "#4C72B0", "optimista": "#55A868"}
 RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices.parquet"
+_NOMBRE_PRECIO = {"ar1": "AR(1) en niveles", "ar1_retornos": "AR(1) retornos (estrés)", "triangular": "triangular"}
+_NOMBRE_PARAMETRO = {
+    "tasa_descuento": "Tasa de descuento real",
+    "precio_nivel_mult": "Nivel del precio (× trayectoria)",
+    "precio_drift_anual": "Drift real del precio",
+    "hectareas": "Hectáreas",
+    "capex_extra_pct": "Recargo de CAPEX",
+    "p_bajo_si_alto": "Vecería: P(año bajo | alto)",
+    "precision_factor_frio": "Precisión del factor de frío",
+    "precision_factor_calor": "Precisión del factor de calor",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +98,14 @@ def simular(
         tasa_descuento=tasa_descuento,
         capex_opex_estocastico=capex_opex_estocastico,
         correlacionar_frio_calor=correlacionar_frio_calor,
-        modo_precio=modo_precio,
+        # "ar1_retornos" es el AR(1) de estrés (sobre retornos, sin
+        # reversión): el mismo generador "ar1" del motor con otros parámetros.
+        modo_precio="ar1" if modo_precio == "ar1_retornos" else modo_precio,
         semilla=semilla,
     )
     costos = ParametrosCostos(hectareas=hectareas)
-    df = run_monte_carlo(params, costos)
+    precio_params = precio_retornos_estres(escenario) if modo_precio == "ar1_retornos" else None
+    df = run_monte_carlo(params, costos, precio_params)
     # `resumen_financiero` necesita el MISMO objeto `costos` usado en la corrida
     # (run_monte_carlo sincroniza costos.hectareas con params.hectareas in-place).
     resumen = resumen_financiero(df, costos)
@@ -97,6 +113,7 @@ def simular(
     fan = pd.concat(
         [
             _percentiles_por_año(df, "rendimiento_kg_ha", "prod"),
+            _percentiles_por_año(df, "precio_usd_kg", "precio"),
             _percentiles_por_año(df, "ingreso_usd", "ingreso"),
             _percentiles_por_año(df, "van_neto_usd", "van"),
         ],
@@ -121,18 +138,23 @@ def cargar_sobol(ruta: str) -> pd.DataFrame:
 
 st.set_page_config(page_title="Monte Carlo — Pistacho Jocolí", layout="wide")
 st.title("Simulación de Monte Carlo — Pistacho Jocolí")
-st.caption("Interfaz sobre el motor cerrado (`src/monte_carlo.py`). Fase 4, 2ª iteración.")
+st.caption(
+    "Interfaz sobre el motor (`src/monte_carlo.py`), sincronizado con el modelo "
+    "financiero v2 (Excel): 120 ha, USD constantes 2026, tasa real, precio AR(1) "
+    "en niveles calibrado con FRED."
+)
 
 with st.sidebar:
     st.header("Parámetros")
 
     hectareas = st.slider(
-        "Hectáreas", min_value=5, max_value=300, value=50, step=5,
+        "Hectáreas", min_value=5, max_value=300, value=120, step=5,
         help=(
-            "Superficie del proyecto. Escala lineal de CAPEX/OPEX/ingresos "
-            "(sin economías de escala). Nota: el modelo ML surrogate y el "
-            "Sobol pre-calculado sólo cubren hasta 100 ha; el motor simula "
-            "cualquier superficie sin problema."
+            "Superficie del proyecto. CAPEX/OPEX escalan con las reglas del "
+            "Excel v2 (por hectárea, por planta, 1 sistema solar cada 50 ha, "
+            "1 operario cada 8 ha). Nota: el modelo ML surrogate y el Sobol "
+            "pre-calculado cubren 60-180 ha; el motor simula cualquier "
+            "superficie sin problema."
         ),
     )
 
@@ -146,16 +168,19 @@ with st.sidebar:
     )
 
     modo_precio = st.selectbox(
-        "Modelo de precio", options=["ar1", "triangular"], index=0,
-        format_func=lambda m: (
-            "AR(1) sobre retornos, calibrado con FRED" if m == "ar1"
-            else "Triangular independiente por año (naive)"
-        ),
+        "Modelo de precio", options=["ar1", "ar1_retornos", "triangular"], index=0,
+        format_func=lambda m: {
+            "ar1": "AR(1) en niveles, revierte a la trayectoria (principal)",
+            "ar1_retornos": "AR(1) sobre retornos, sin reversión (estrés)",
+            "triangular": "Triangular independiente por año (naive)",
+        }[m],
         help=(
-            "AR(1) (default del motor): proceso con memoria calibrado con "
-            "datos reales de precio del pistacho (FRED, WPU01190106) -- ver "
-            "src/precio_estocastico.py. Modela el riesgo de precio como "
-            "sistemático/persistente, no idiosincrático. "
+            "AR(1) en niveles (default del motor): el precio oscila "
+            "alrededor de la trayectoria del Excel y vuelve a ella (semivida "
+            "~4 años), calibrado con la serie real deflactada de FRED "
+            "(WPU01190106) -- ver src/precio_estocastico.py. "
+            "AR(1) sobre retornos: el desvío no revierte y la dispersión del "
+            "año 20 duplica el rango histórico; se usa como estrés. "
             "Triangular: ESCENARIOS_PRECIO, independiente por año sin "
             "memoria -- el modelo naive anterior, disponible acá solo como "
             "comparación explícita."
@@ -163,9 +188,14 @@ with st.sidebar:
     )
 
     tasa_descuento = st.slider(
-        "Tasa de descuento", min_value=0.02, max_value=0.20, value=0.08, step=0.005,
-        format="%.3f",
-        help="Variable dominante en el análisis de Sobol (S_T ≈ 0,86–0,92).",
+        "Tasa de descuento real", min_value=0.02, max_value=0.25, value=0.1423, step=0.0025,
+        format="%.4f",
+        help=(
+            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). Primera variable "
+            "en el análisis de Sobol (rango 10–18%): S_T ≈ 0,42–0,56 sobre el "
+            "VAN medio y ≈ 0,56–0,72 sobre P(VAN<0), según el escenario. La "
+            "siguen el nivel del precio (S_T ≈ 0,22–0,52) y su drift."
+        ),
     )
 
     capex_opex_estocastico = st.checkbox(
@@ -229,8 +259,9 @@ with tab_van:
     c2.metric("P(VAN < 0)", f"{prob_van_neg:.1%}")
     c3.metric("TIR media", f"{tir_media:.2%}")
 
+    # "\$" escapado: dos "$" en el mismo st.markdown se renderizan como LaTeX.
     st.markdown(
-        f"**P10:** US$ {p10:,.0f}  ·  **P50:** US$ {p50:,.0f}  ·  **P90:** US$ {p90:,.0f}"
+        f"**P10:** US\\$ {p10:,.0f}  ·  **P50:** US\\$ {p50:,.0f}  ·  **P90:** US\\$ {p90:,.0f}"
     )
     if n_tir_nan:
         st.caption(
@@ -265,7 +296,11 @@ with tab_van:
 # Tab 2 — fan charts por año
 # ---------------------------------------------------------------------------
 
-def _fan_chart(ax, fan: pd.DataFrame, prefijo: str, titulo: str, ylabel: str, escala: float = 1.0):
+def _fan_chart(
+    ax, fan: pd.DataFrame, prefijo: str, titulo: str, ylabel: str,
+    escala: float = 1.0, desde_año: int = 1,
+):
+    fan = fan.loc[fan.index >= desde_año]
     años = fan.index.to_numpy()
     ax.fill_between(
         años, fan[f"{prefijo}_p10"] / escala, fan[f"{prefijo}_p90"] / escala,
@@ -275,31 +310,42 @@ def _fan_chart(ax, fan: pd.DataFrame, prefijo: str, titulo: str, ylabel: str, es
     ax.set_title(titulo)
     ax.set_xlabel("Año del proyecto")
     ax.set_ylabel(ylabel)
-    ax.legend(fontsize=8)
 
 
 with tab_fan:
     st.caption(
         "Banda P10–P90 y mediana P50 por año, sobre las "
         f"{n_simulaciones:,} simulaciones del escenario **{escenario}**. "
-        "El VAN es acumulado y descontado; producción e ingreso son anuales."
+        "El VAN es acumulado y descontado; producción, precio e ingreso son anuales."
     )
     fan = res["fan"]
-    fcol1, fcol2, fcol3 = st.columns(3)
-    for columna, (prefijo, titulo, ylabel, escala) in zip(
-        (fcol1, fcol2, fcol3),
-        (
-            ("prod", "Producción", "kg/ha", 1.0),
-            ("ingreso", "Ingreso bruto anual", "millones USD", 1e6),
-            ("van", "VAN neto acumulado", "millones USD", 1e6),
-        ),
-    ):
-        fig, ax = plt.subplots(figsize=(4.2, 3.6))
-        _fan_chart(ax, fan, prefijo, titulo, ylabel, escala)
-        if prefijo == "van":
-            ax.axhline(0, color="black", linewidth=1.0, alpha=0.6)
-        fig.tight_layout()
-        columna.pyplot(fig)
+    trayectoria_excel = cargar_modelo_v2().trayectoria_precio(escenario, len(fan))
+    primer_año_precio = int(fan.index[np.argmax(trayectoria_excel > 0)])
+    paneles = (
+        ("prod", "Producción", "kg/ha", 1.0),
+        ("precio", "Precio de venta", "USD/kg (constantes 2026)", 1.0),
+        ("ingreso", "Ingreso bruto anual", "millones USD", 1e6),
+        ("van", "VAN neto acumulado", "millones USD", 1e6),
+    )
+    for fila in (paneles[:2], paneles[2:]):
+        for columna, (prefijo, titulo, ylabel, escala) in zip(st.columns(2), fila):
+            fig, ax = plt.subplots(figsize=(5.2, 3.6))
+            if prefijo == "precio":
+                # Solo años con venta: antes de la primera cosecha no hay precio.
+                _fan_chart(ax, fan, prefijo, titulo, ylabel, escala, desde_año=primer_año_precio)
+                años = fan.index.to_numpy()
+                con_precio = años >= primer_año_precio
+                ax.plot(
+                    años[con_precio], trayectoria_excel[con_precio], color="#C44E52",
+                    linestyle="--", linewidth=1.5, label="Trayectoria del Excel",
+                )
+            else:
+                _fan_chart(ax, fan, prefijo, titulo, ylabel, escala)
+            if prefijo == "van":
+                ax.axhline(0, color="black", linewidth=1.0, alpha=0.6)
+            ax.legend(fontsize=8)
+            fig.tight_layout()
+            columna.pyplot(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -325,18 +371,19 @@ with tab_sobol:
 
         st.caption(
             "Índices de Sobol **totales (ST)** del VAN medio, pre-calculados con "
-            "`src/sensibilidad.py` con `modo_precio=\"ar1\"` (no se recalculan en "
+            "`src/sensibilidad.py` con el AR(1) en niveles (no se recalculan en "
             "vivo). Barras de error = IC bootstrap (`ST_conf`)."
         )
         if modo_precio != "ar1":
             st.info(
-                "El sidebar tiene 'Modelo de precio' en triangular, pero estos "
-                "índices se pre-calcularon con AR(1) -- no recalculan en vivo, "
-                "así que no reflejan el modo triangular seleccionado."
+                "El sidebar tiene otro 'Modelo de precio', pero estos índices "
+                "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
+                "vivo, así que no reflejan el modelo seleccionado."
             )
+        etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
         fig, ax = plt.subplots(figsize=(8, 3.8))
         ax.barh(
-            sub["parametro"], sub["ST"],
+            etiquetas, sub["ST"],
             xerr=sub["ST_conf"].to_numpy(), color="#4C72B0",
             error_kw=dict(ecolor="#555555", lw=1),
         )
@@ -345,11 +392,21 @@ with tab_sobol:
         fig.tight_layout()
         st.pyplot(fig)
 
+        tabla_sobol = (
+            sub.assign(parametro=etiquetas)
+            .sort_values("ST", ascending=False)[["parametro", "S1", "S1_conf", "ST", "ST_conf"]]
+            .rename(columns={
+                "parametro": "Parámetro",
+                "S1": "Primer orden (S1)",
+                "S1_conf": "IC S1 (±)",
+                "ST": "Total (ST)",
+                "ST_conf": "IC ST (±)",
+            })
+        )
         st.dataframe(
-            sub.sort_values("ST", ascending=False)[
-                ["parametro", "S1", "S1_conf", "ST", "ST_conf"]
-            ].reset_index(drop=True),
+            tabla_sobol.style.format("{:.3f}", subset=tabla_sobol.columns[1:]),
             use_container_width=True,
+            hide_index=True,
         )
 
 
@@ -362,7 +419,7 @@ with tab_cmp:
         f"Los tres escenarios de precio a los parámetros actuales del sidebar "
         f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
         f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
-        f"modelo de precio {'AR(1)' if modo_precio == 'ar1' else 'triangular'}, "
+        f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):
@@ -386,7 +443,7 @@ with tab_cmp:
 
     tabla = pd.DataFrame(
         {
-            "escenario": ESCENARIOS,
+            "Escenario": ESCENARIOS,
             "VAN medio (USD)": [float(np.mean(cmp[e]["van"])) for e in ESCENARIOS],
             "P(VAN<0)": [float(np.mean(cmp[e]["van"] < 0)) for e in ESCENARIOS],
             "TIR media": [float(np.nanmean(cmp[e]["tir"])) for e in ESCENARIOS],
@@ -397,4 +454,5 @@ with tab_cmp:
             {"VAN medio (USD)": "{:,.0f}", "P(VAN<0)": "{:.1%}", "TIR media": "{:.2%}"}
         ),
         use_container_width=True,
+        hide_index=True,
     )

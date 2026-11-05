@@ -23,13 +23,14 @@ superficie configurable.
 
 **Implementado:** análisis climático histórico (Módulo 0); simulación de
 rendimientos con 5 fuentes de variabilidad, recalibrada contra el rendimiento
-validado real (rendimiento medio ~2.990 kg/ha en plena producción, calibrado
-contra el dato validado en `data/external/produccion_ingresos_plan.csv`, ver
+validado del modelo financiero v2 (3.000 kg/ha a plena producción, ver
 `RENDIMIENTO_VALIDADO_KG_HA`/`RENDIMIENTO_IDEAL_KG_HA` en `src/monte_carlo.py`);
-estructura de costos (CAPEX/OPEX) calibrada con el plan de negocio real, con
-CAPEX (riego, pozo de agua) y OPEX estocásticos dentro de cada iteración del
-Monte Carlo (antes eran 100% determinísticos), a 50 ha por defecto; VAN
-neto, TIR y año de recupero; reducción de varianza por variables antitéticas
+estructura de costos e impuestos sincronizada con el modelo financiero v2
+(`data/referencia/`, 120 ha por defecto: CAPEX con amortizaciones, personal,
+OPEX con rampa, maquila, IIBB, Ganancias y valor residual, en USD constantes
+y a tasa real 14,23%), con OPEX estocástico dentro de cada iteración y un
+modo determinístico que reproduce el VAN y la TIR del Excel
+(`tests/test_consistencia_excel.py`); VAN neto, TIR y año de recupero; reducción de varianza por variables antitéticas
 (`run_monte_carlo_antitetico()`, ~69% de reducción de varianza del estimador
 verificada); análisis de sensibilidad global de Sobol sobre el simulador real
 (`src/sensibilidad.py`, notebook 03); modelo de precio con memoria calibrado
@@ -63,9 +64,13 @@ tesis-maestria/
 │   ├── precio_estocastico.py     # generador de precio con memoria (AR(1) sobre retornos)
 │   └── dataset_ml.py             # dataset sintético para ML vía Latin Hypercube Sampling
 ├── data/
-│   ├── raw/                      # datos climáticos descargados (generados al correr)
-│   ├── external/                 # datos del plan de negocio (CAPEX, OPEX, ver README propio)
+│   ├── raw/                      # datos climáticos, precio FRED y CPI-U (generados al correr)
+│   ├── referencia/               # modelo financiero v2 (Excel), fuente de CAPEX/OPEX
+│   ├── modelo_v2/                # CSV exportados del Excel por scripts/importar_modelo_v2.py
+│   ├── historico/                # CSV del plan de negocio anterior (archivados, no se usan)
 │   └── processed/                # índices de Sobol y otros derivados (generados al correr)
+├── scripts/                      # importar_modelo_v2.py
+├── tests/                        # consistencia con el Excel, TIR (pytest)
 ├── notas/                        # bitácora de trabajo, no forma parte de la tesis en sí
 └── requirements.txt
 ```

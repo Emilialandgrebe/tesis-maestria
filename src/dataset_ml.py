@@ -33,20 +33,27 @@ from src.precio_estocastico import ParametrosPrecioAR1
 # Espacio de parámetros
 # ---------------------------------------------------------------------------
 
-# Mismo criterio que PROBLEMA_SOBOL en src/sensibilidad.py, con dos cambios:
-# - hectareas: piso bajado de 50 a 25 para cubrir también la escala actual
-#   del proyecto (Fase I), no solo la ampliación a Fase II.
-# - p_alto_si_bajo: agregado (Sobol lo dejaba fijo en 0.80); acá no hay
-#   costo adicional en barrerlo también.
+# Mismos rangos que PROBLEMA_SOBOL en src/sensibilidad.py (tasa real
+# 10-18%, 60-180 ha, drift y nivel del precio), más p_alto_si_bajo, que
+# Sobol deja fijo (acá no hay costo adicional en barrerlo también).
+# precio_drift_anual es un drift real ADICIONAL sobre la trayectoria de
+# precio del Excel (ver ParametrosPrecioAR1.c en src/precio_estocastico.py).
 ESPACIO_PARAMETROS: dict[str, tuple[float, float]] = {
-    "tasa_descuento":         (0.05, 0.12),
-    "hectareas":              (25.0, 100.0),
+    "tasa_descuento":         (0.10, 0.18),
+    "hectareas":              (60.0, 180.0),
     "capex_extra_pct":        (0.0, 0.30),
     "precision_factor_frio":  (5.0, 30.0),
     "precision_factor_calor": (5.0, 30.0),
     "p_bajo_si_alto":         (0.50, 0.80),
     "p_alto_si_bajo":         (0.60, 0.90),
-    "precio_drift_anual":     (0.0, 0.025),  # incertidumbre del drift AR(1), ver plan
+    # Simétrico alrededor de 0: la trayectoria del Excel ya trae la
+    # tendencia real; un rango solo positivo (el anterior, 0-2,5%) sesgaba
+    # el precio hacia arriba. ±1,25% real anual cubre el drift estimado
+    # sobre la serie real (-0,15%) con margen para su incertidumbre.
+    "precio_drift_anual":     (-0.0125, 0.0125),
+    # Multiplicador de toda la trayectoria base de precio, mismo rango que
+    # en Sobol (ver PROBLEMA_SOBOL en src/sensibilidad.py).
+    "precio_nivel_mult":      (0.8, 1.2),
 }
 
 NOMBRES_PARAMETROS = list(ESPACIO_PARAMETROS.keys())
@@ -115,12 +122,13 @@ def evaluar_punto(
     resumen_financiero) con los parámetros de `fila` y resume el resultado en
     los targets del dataset.
 
-    El precio usa el modelo AR(1) sobre retornos calibrado con FRED
+    El precio usa el modelo AR(1) en niveles calibrado con FRED
     (src/precio_estocastico.py), no el triangular independiente viejo. El
     drift (`c`) se barre como parámetro de entrada (`precio_drift_anual`) en
     vez de quedar fijo: no está identificado con precisión (ver
     notas/plan_precio_historico.md, sección 0) y mueve sustancialmente tanto
-    el VAN medio como prob_van_negativo. phi/sigma_eps quedan en su default
+    el VAN medio como prob_van_negativo; lo mismo el nivel de la trayectoria
+    (`precio_nivel_mult`). phi/sigma_eps quedan en su default
     calibrado (no se barren, tienen mejor soporte estadístico).
 
     La semilla se mantiene fija entre puntos (igual que en sensibilidad.py):
@@ -147,12 +155,12 @@ def evaluar_punto(
         capex_opex_estocastico=False,
         correlacionar_frio_calor=False,
     )
-    costos = ParametrosCostos(hectareas=fila["hectareas"])
-    costos.capex_inicial_ha *= 1.0 + fila["capex_extra_pct"]
+    costos = ParametrosCostos(hectareas=fila["hectareas"], capex_factor=1.0 + fila["capex_extra_pct"])
 
     precio_params = ParametrosPrecioAR1(
         escenario=fila["escenario"],
         c=fila["precio_drift_anual"],
+        nivel_mult=fila["precio_nivel_mult"],
     )
 
     df = run_monte_carlo_precio_historico(params, costos, precio_params)

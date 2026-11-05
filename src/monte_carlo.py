@@ -8,11 +8,13 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from scipy import integrate
+from scipy.optimize import brentq
 from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
-from src.costos import ParametrosCostos, costo_operativo_anual, flujo_caja_neto
+from src.costos import HECTAREAS_REFERENCIA, ParametrosCostos, flujo_caja_neto, opex_total
+from src.modelo_v2 import cargar_modelo_v2
 from src.precio_estocastico import (
     ParametrosPrecioAR1,
     simulate_prices_ar1,
@@ -23,15 +25,16 @@ from src.precio_estocastico import (
 # Constantes del plan de negocios y calibración climática
 # ---------------------------------------------------------------------------
 
-HECTAREAS = 50.0
+_MODELO = cargar_modelo_v2()
 
-# Rendimiento VALIDADO en plena producción (año 12+): dato real, tomado de
-# data/external/produccion_ingresos_plan.csv (el plan de negocio). Es el
-# rendimiento ESPERADO una vez aplicados frío, calor, vecería y
-# supervivencia en sus valores medios/calibrados — no un valor que se
-# observe todos los años (la propia curva de esa fuente rebota entre
-# ~2.400 y 3.000 kg/ha por vecería).
-RENDIMIENTO_VALIDADO_KG_HA = 3_000
+HECTAREAS = HECTAREAS_REFERENCIA  # 120 ha, Supuestos!B11 del Excel v2
+
+# Rendimiento a plena producción (100% de la curva): Supuestos!B20 del Excel
+# v2, 3.000 kg/ha de pistacho con cáscara. Es el rendimiento ESPERADO una
+# vez aplicados frío, calor y supervivencia en sus valores medios
+# calibrados (la vecería tiene media 1 desde la sincronización v2, ver
+# `_media_veceria()`), no un valor que se observe todos los años.
+RENDIMIENTO_VALIDADO_KG_HA = _MODELO.supuestos["rendimiento_plena_kg_ha"]
 
 # Calibración climática y biológica real (Módulo 0, ERA5-Land / Open-Meteo,
 # Jocolí 1990-2024). Se usan tanto como defaults de ParametrosMC como para
@@ -57,21 +60,46 @@ _PLANTAS_BETA = 20.0
 # chequeo de robustez contra el ruido de muestreo del propio Monte Carlo.
 CORR_HORAS_FRIO_TMAX_VERANO = -0.2894
 
-# Fracción del rendimiento pleno por año del proyecto (1–20)
-_CURVA_BASE: dict[int, float] = {
-    1: 0.00, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00,
-    6: 0.10, 7: 0.20, 8: 0.40, 9: 0.60, 10: 0.75,
-    11: 0.85, 12: 0.95,
+# Fracción del rendimiento pleno por año del proyecto (1-20).
+#
+# CURVA_EXCEL es la curva de Supuestos!D54:X54 tal cual. Ya trae la vecería
+# ADENTRO (años 12-20: 0,90 / 0,80 / 0,75 / 0,95 / 0,80 / 0,75 / 0,85 / 1 /
+# 1): se usa solo en el modo determinístico (`ParametrosMC.deterministico`),
+# que reproduce el Excel sin ninguna fuente estocástica.
+#
+# CURVA_PRODUCCION es la curva de maduración para Monte Carlo, donde la
+# vecería se simula aparte (`_simular_veceria()`): usar la curva del Excel
+# la contaría dos veces. Primera cosecha en el año siguiente al último
+# pre-productivo (Supuestos!B8 = 6 -> año 7), rampa del Excel en los años
+# 7-11, y desde el año 12 una meseta igual al promedio de la curva del
+# Excel en los años 12-20 (7,8 / 9 = 0,8667): así el rendimiento esperado
+# acumulado de la meseta coincide con el del Excel.
+ANIO_PRIMERA_COSECHA = int(_MODELO.supuestos["ultimo_anio_preproductivo"]) + 1
+ANIO_INICIO_MESETA = 12
+
+_CURVA_EXCEL = _MODELO.curva_excel(_MODELO.n_años)
+CURVA_EXCEL: dict[int, float] = {
+    año: float(_CURVA_EXCEL[año - 1]) for año in range(1, _MODELO.n_años + 1)
 }
+MESETA_PRODUCCION = float(_CURVA_EXCEL[ANIO_INICIO_MESETA - 1:].mean())
 CURVA_PRODUCCION: dict[int, float] = {
-    año: _CURVA_BASE.get(año, 1.00) for año in range(1, 21)
+    año: (
+        0.0 if año < ANIO_PRIMERA_COSECHA
+        else CURVA_EXCEL[año] if año < ANIO_INICIO_MESETA
+        else MESETA_PRODUCCION
+    )
+    for año in range(1, _MODELO.n_años + 1)
 }
 
-# Escenarios de precio (min, moda, max) en USD/kg — distribución triangular
+# Modo de precio "triangular" (comparación contra el modelo naive, sin
+# memoria): MULTIPLICADOR (min, moda, max) independiente por año sobre la
+# trayectoria de precio del Excel v2 del escenario. Los anchos relativos son
+# los de la triangular absoluta anterior al Excel v2 (pesimista 6/7/8,5,
+# base 8/9,5/11,5, optimista 11/13/15 USD/kg), divididos por su moda.
 ESCENARIOS_PRECIO: dict[str, tuple[float, float, float]] = {
-    "pesimista": (6.0,  7.0,  8.5),
-    "base":      (8.0,  9.5, 11.5),
-    "optimista": (11.0, 13.0, 15.0),
+    "pesimista": (6.0 / 7.0,  1.0,  8.5 / 7.0),
+    "base":      (8.0 / 9.5,  1.0, 11.5 / 9.5),
+    "optimista": (11.0 / 13.0, 1.0, 15.0 / 13.0),
 }
 
 
@@ -265,55 +293,55 @@ def _muestrear_clima_correlacionado_antitetico(
     return horas, tmax_verano
 
 
+def _esperanza_factor_frio(media: float, std: float) -> float:
+    """E[factor de frío] con horas ~ Normal(media, std): integración numérica
+    de la función de transferencia (el ruido Beta posterior de
+    `_muestrear_beta_por_media` no cambia la media, por construcción:
+    E[Beta(m*k, (1-m)*k)] = m)."""
+    return integrate.quad(
+        lambda h: float(_media_factor_frio(np.array([h]))[0]) * norm.pdf(h, media, std),
+        media - 6 * std,
+        media + 6 * std,
+    )[0]
+
+
+def _esperanza_factor_calor(media: float, std: float) -> float:
+    """E[factor de calor] con tmax de verano ~ Normal(media, std). Mismo
+    criterio que `_esperanza_factor_frio`."""
+    return integrate.quad(
+        lambda t: float(_media_factor_calor(np.array([t]))[0]) * norm.pdf(t, media, std),
+        media - 6 * std,
+        media + 6 * std,
+    )[0]
+
+
 def _producto_esperado_factores() -> float:
     """
-    Producto de los valores esperados de los cuatro factores estocásticos de
-    `simulate_yields()` (frío, calor, vecería, supervivencia), bajo la
-    calibración por defecto. Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
+    Producto de los valores esperados de los factores estocásticos de
+    `simulate_yields()` que NO están normalizados a media 1 (frío, calor,
+    supervivencia), bajo la calibración por defecto. La vecería no entra:
+    desde la sincronización v2 su factor tiene media 1 por construcción
+    (ver `_media_veceria()`). Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
     partir de RENDIMIENTO_VALIDADO_KG_HA — ver el docstring de esa constante.
-
-    Frío y calor: integración numérica de la función de transferencia
-    correspondiente contra la densidad Normal calibrada (el ruido Beta
-    posterior de `_muestrear_beta_por_media` no cambia la media, por
-    construcción: E[Beta(m*k, (1-m)*k)] = m — no hace falta simularlo acá).
-
-    Vecería: probabilidad estacionaria de la cadena de Markov de 2 estados
-    (fórmula cerrada: pi_bajo = p_bajo_si_alto / (p_bajo_si_alto + p_alto_si_bajo)).
 
     Supervivencia: media de 1 - Beta(alpha, beta) = 1 - alpha / (alpha + beta).
     """
-    e_frio = integrate.quad(
-        lambda h: float(_media_factor_frio(np.array([h]))[0])
-        * norm.pdf(h, _HORAS_FRIO_MEDIA, _HORAS_FRIO_STD),
-        _HORAS_FRIO_MEDIA - 6 * _HORAS_FRIO_STD,
-        _HORAS_FRIO_MEDIA + 6 * _HORAS_FRIO_STD,
-    )[0]
-
-    e_calor = integrate.quad(
-        lambda t: float(_media_factor_calor(np.array([t]))[0])
-        * norm.pdf(t, _CALOR_VERANO_MEDIA, _CALOR_VERANO_STD),
-        _CALOR_VERANO_MEDIA - 6 * _CALOR_VERANO_STD,
-        _CALOR_VERANO_MEDIA + 6 * _CALOR_VERANO_STD,
-    )[0]
-
-    pi_bajo = _P_BAJO_SI_ALTO / (_P_BAJO_SI_ALTO + _P_ALTO_SI_BAJO)
-    factor_bajo_medio = (_VECERIA_FACTOR_MIN + _VECERIA_FACTOR_MAX) / 2
-    e_veceria = pi_bajo * factor_bajo_medio + (1 - pi_bajo) * 1.0
-
+    e_frio = _esperanza_factor_frio(_HORAS_FRIO_MEDIA, _HORAS_FRIO_STD)
+    e_calor = _esperanza_factor_calor(_CALOR_VERANO_MEDIA, _CALOR_VERANO_STD)
     e_supervivencia = 1.0 - _PLANTAS_ALPHA / (_PLANTAS_ALPHA + _PLANTAS_BETA)
 
-    return e_frio * e_calor * e_veceria * e_supervivencia
+    return e_frio * e_calor * e_supervivencia
 
 
 # Rendimiento IDEAL: constante de NORMALIZACIÓN derivada, no una afirmación
 # agronómica directa. Es el valor que hay que poner como techo de la curva
-# de maduración (curva_base) para que, después de multiplicar por los cuatro
-# factores estocásticos (frío, calor, vecería, supervivencia) en sus valores
-# esperados, el rendimiento resultante converja al dato real y validado
-# RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha, ver esa constante más arriba).
-# RENDIMIENTO_IDEAL_KG_HA nunca se observa en la práctica: requeriría que
-# los cuatro factores dieran 1.0 simultáneamente, lo cual no ocurre (vecería
-# y supervivencia son estructuralmente siempre < 1).
+# de maduración (curva_base) para que, después de multiplicar por los
+# factores estocásticos (frío, calor, supervivencia; la vecería tiene media
+# 1) en sus valores esperados, el rendimiento resultante converja al dato
+# del Excel RENDIMIENTO_VALIDADO_KG_HA (3.000 kg/ha, ver esa constante más
+# arriba). RENDIMIENTO_IDEAL_KG_HA nunca se observa en la práctica:
+# requeriría que todos los factores dieran 1.0 simultáneamente (la
+# supervivencia es estructuralmente siempre < 1).
 RENDIMIENTO_IDEAL_KG_HA = RENDIMIENTO_VALIDADO_KG_HA / _producto_esperado_factores()
 
 
@@ -366,9 +394,12 @@ class ParametrosMC:
     plantas_alpha: float = _PLANTAS_ALPHA
     plantas_beta: float = _PLANTAS_BETA
 
-    # Escenario de precio y tasa de descuento para VAN
+    # Escenario de precio y tasa de descuento para VAN. La tasa es REAL en
+    # USD (hoja Tasa del Excel v2: CAPM + riesgo país de Damodaran = 17,09%
+    # nominal, pasado a real con Fisher contra 2,5% de inflación de EE.UU.),
+    # coherente con flujos en USD constantes de 2026.
     escenario: Literal["pesimista", "base", "optimista"] = "base"
-    tasa_descuento: float = 0.08
+    tasa_descuento: float = _MODELO.supuestos["tasa_descuento_real"]
 
     # Generador de precio: "ar1" (AR(1) sobre retornos log, calibrado con
     # datos reales de FRED -- src/precio_estocastico.py) o "triangular"
@@ -392,6 +423,27 @@ class ParametrosMC:
     # recurrir a anchos "casi cero" que rng.triangular no acepta.
     capex_opex_estocastico: bool = True
 
+    # Modo determinístico COMPLETO: reproduce el Excel v2 sin ninguna fuente
+    # estocástica. Rendimiento = CURVA_EXCEL (vecería del Excel incluida) *
+    # RENDIMIENTO_VALIDADO_KG_HA, sin clima, vecería simulada ni falla de
+    # plantas; precio = trayectoria del Excel del `escenario` (ignora
+    # `modo_precio` y `precio_params`); multiplicador de OPEX = 1. Las
+    # `n_simulaciones` filas salen idénticas. Pensado para verificar el
+    # motor contra el Excel (tests/test_consistencia_excel.py), no para
+    # análisis de riesgo.
+    deterministico: bool = False
+
+    # Fuentes estocásticas reemplazadas por su valor esperado, para
+    # descomponer la varianza del VAN por fuente (scripts/descomponer_varianza.py).
+    # Valores: "precio" (trayectoria del Excel, que es E[precio] con c=0),
+    # "clima" (factores de frío y calor en su media), "veceria" (factor 1) y
+    # "plantas" (supervivencia media). Los sorteos se hacen igual y después
+    # se pisan: el consumo de `rng` no cambia, así que las fuentes que quedan
+    # activas reciben exactamente los mismos números en todas las corridas
+    # (números aleatorios comunes). El OPEX se apaga con
+    # `capex_opex_estocastico=False`.
+    fuentes_fijas: frozenset[str] = frozenset()
+
     semilla: int = 42
 
 
@@ -399,15 +451,42 @@ class ParametrosMC:
 # Funciones internas restantes
 # ---------------------------------------------------------------------------
 
+def _pi_bajo_estacionaria(params: ParametrosMC) -> float:
+    """Probabilidad estacionaria del estado "bajo" de la cadena de vecería."""
+    return params.p_bajo_si_alto / (params.p_bajo_si_alto + params.p_alto_si_bajo)
+
+
+def _media_veceria(params: ParametrosMC) -> float:
+    """
+    E[factor de vecería crudo] bajo la distribución estacionaria: los años
+    altos valen 1 y los bajos Uniforme(min, max). Se divide el factor crudo
+    por este valor para que la vecería tenga media 1 (desvío de media cero):
+    redistribuye la producción entre años sin cambiar el rendimiento
+    esperado, que ya fija la curva (la meseta de CURVA_PRODUCCION es el
+    promedio del Excel, que ya incluye años malos). La normalización usa los
+    `params` de la corrida, así que sigue valiendo cuando Sobol o el dataset
+    barren `p_bajo_si_alto` / `p_alto_si_bajo`: esos parámetros mueven la
+    VARIANZA del rendimiento, no su media.
+    """
+    pi_bajo = _pi_bajo_estacionaria(params)
+    factor_bajo_medio = (params.veceria_factor_min + params.veceria_factor_max) / 2
+    return pi_bajo * factor_bajo_medio + (1 - pi_bajo)
+
+
 def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
     Cadena de Markov binaria (año alto / año bajo) para modelar la alternancia.
 
-    Retorna array (n_simulaciones, n_años) con factores multiplicadores.
+    El estado del año 1 se sortea con la distribución ESTACIONARIA de la
+    cadena (no 50/50): así el factor tiene la misma media en todos los años
+    y la normalización por `_media_veceria()` da media 1 exacta en cada año.
+
+    Retorna array (n_simulaciones, n_años) con factores multiplicadores de
+    media 1.
     """
     n, T = params.n_simulaciones, params.n_años
     es_bajo = np.zeros((n, T), dtype=bool)
-    es_bajo[:, 0] = rng.random(n) < 0.5  # estado inicial aleatorio
+    es_bajo[:, 0] = rng.random(n) < _pi_bajo_estacionaria(params)
 
     for t in range(1, T):
         p_bajo = np.where(
@@ -422,7 +501,62 @@ def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarr
         params.veceria_factor_max,
         (n, T),
     )
-    return np.where(es_bajo, factores_bajos, 1.0)
+    return np.where(es_bajo, factores_bajos, 1.0) / _media_veceria(params)
+
+
+FUENTES_ESTOCASTICAS = ("precio", "clima", "veceria", "plantas")
+
+
+def _validar_fuentes_fijas(params: ParametrosMC) -> None:
+    desconocidas = set(params.fuentes_fijas) - set(FUENTES_ESTOCASTICAS)
+    if desconocidas:
+        raise ValueError(
+            f"fuentes_fijas admite {FUENTES_ESTOCASTICAS}, recibido {sorted(desconocidas)}"
+        )
+
+
+def _combinar_factores(
+    params: ParametrosMC,
+    curva_base: np.ndarray,
+    factor_veceria: np.ndarray,
+    factor_frio: np.ndarray,
+    factor_calor: np.ndarray,
+    supervivencia: np.ndarray,
+) -> np.ndarray:
+    """Producto de la curva por los factores, con las fuentes de
+    `params.fuentes_fijas` reemplazadas por su valor esperado."""
+    fijas = params.fuentes_fijas
+    if "veceria" in fijas:
+        factor_veceria = np.ones_like(factor_veceria)
+    if "clima" in fijas:
+        factor_frio = np.full_like(
+            factor_frio, _esperanza_factor_frio(params.horas_frio_media, params.horas_frio_std)
+        )
+        factor_calor = np.full_like(
+            factor_calor, _esperanza_factor_calor(params.calor_verano_media, params.calor_verano_std)
+        )
+    if "plantas" in fijas:
+        supervivencia = np.full_like(
+            supervivencia, 1.0 - params.plantas_alpha / (params.plantas_alpha + params.plantas_beta)
+        )
+    return np.maximum(
+        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    )
+
+
+def _fijar_precio(
+    params: ParametrosMC, prices: np.ndarray, precio_params: ParametrosPrecioAR1 | None
+) -> np.ndarray:
+    """Si "precio" está en `params.fuentes_fijas`, reemplaza los precios
+    simulados por la trayectoria base: la de `precio_params` si la trae, si
+    no la del Excel del escenario."""
+    if "precio" not in params.fuentes_fijas:
+        return prices
+    if precio_params is not None and params.modo_precio == "ar1":
+        trayectoria = precio_params.trayectoria_base(params.n_años)
+    else:
+        trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    return np.broadcast_to(trayectoria, prices.shape).copy()
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +624,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     u_magnitud = _generar_uniformes_antiteticos(n, (T,), rng)
 
     es_bajo = np.zeros((n, T), dtype=bool)
-    es_bajo[:, 0] = u_estado[:, 0] < 0.5
+    es_bajo[:, 0] = u_estado[:, 0] < _pi_bajo_estacionaria(params)
     for t in range(1, T):
         p_bajo = np.where(
             ~es_bajo[:, t - 1],
@@ -504,7 +638,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
         params.veceria_factor_min
         + (params.veceria_factor_max - params.veceria_factor_min) * u_magnitud
     )
-    factor_veceria = np.where(es_bajo, factores_bajos, 1.0)
+    factor_veceria = np.where(es_bajo, factores_bajos, 1.0) / _media_veceria(params)
 
     # --- Frío y calor: variables climáticas correlacionadas (cópula
     # gaussiana) o independientes; el ruido Beta sobre cada factor es
@@ -548,8 +682,8 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     u_supervivencia = _generar_uniformes_antiteticos(n, (1,), rng)
     supervivencia = 1.0 - beta_dist.ppf(u_supervivencia, params.plantas_alpha, params.plantas_beta)
 
-    return np.maximum(
-        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    return _combinar_factores(
+        params, curva_base, factor_veceria, factor_frio, factor_calor, supervivencia
     )
 
 
@@ -564,9 +698,10 @@ def simulate_prices_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     u = _generar_uniformes_antiteticos(params.n_simulaciones, (params.n_años,), rng)
     c = (mode - low) / (high - low)  # parámetro de forma de scipy.stats.triang
-    return triang_dist.ppf(u, c, loc=low, scale=high - low)
+    return trayectoria.reshape(1, -1) * triang_dist.ppf(u, c, loc=low, scale=high - low)
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +714,7 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
 
     Combina cinco fuentes de variabilidad:
     1. Curva de maduración determinista (años 1–20)
-    2. Vecería (alternancia productiva) — cadena de Markov
+    2. Vecería (alternancia productiva) — cadena de Markov, media 1
     3. Déficit de horas de frío respecto a la media histórica real del sitio
        — media determinística + ruido Beta(media, precision_factor_frio)
     4. Déficit de calor estival (ene-feb) respecto a la media histórica real
@@ -654,21 +789,25 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
     supervivencia = 1.0 - rng.beta(params.plantas_alpha, params.plantas_beta, (n, 1))
 
-    return np.maximum(
-        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    return _combinar_factores(
+        params, curva_base, factor_veceria, factor_frio, factor_calor, supervivencia
     )
 
 
 def simulate_prices(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
     """
-    Simula el precio de venta en USD/kg con distribución triangular.
+    Simula el precio de venta en USD/kg: trayectoria del Excel por un
+    multiplicador triangular independiente por año (ver ESCENARIOS_PRECIO).
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
-    return rng.triangular(low, mode, high, (params.n_simulaciones, params.n_años))
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    return trayectoria.reshape(1, -1) * rng.triangular(
+        low, mode, high, (params.n_simulaciones, params.n_años)
+    )
 
 
 def _despachar_precios(
@@ -888,6 +1027,24 @@ def simulate_opex_multiplicador_antitetico(
     return _triangular_ppf_o_constante(u, 1.0 - d, 1.0, 1.0 + d)
 
 
+def _componentes_deterministicos(
+    params: ParametrosMC,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    (yields, prices, capex_extra, opex_multiplicador) del modo determinístico
+    -- ver `ParametrosMC.deterministico`. No consume `rng`.
+    """
+    n, T = params.n_simulaciones, params.n_años
+    curva = np.array([CURVA_EXCEL[a] for a in range(1, T + 1)]) * RENDIMIENTO_VALIDADO_KG_HA
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, T)
+    return (
+        np.tile(curva, (n, 1)),
+        np.tile(trayectoria, (n, 1)),
+        np.zeros(n),
+        np.ones(n),
+    )
+
+
 def _resolver_params_costos(
     params: ParametrosMC | None, costos: ParametrosCostos | None
 ) -> tuple[ParametrosMC, ParametrosCostos]:
@@ -914,9 +1071,12 @@ def _orquestar_resultado(
     opex_multiplicador: np.ndarray,
 ) -> pd.DataFrame:
     """
-    Arma el DataFrame de resultados (ingresos, OPEX, flujo neto, VAN neto) a
-    partir de arrays de rendimiento, precio, CAPEX extra y multiplicador de
-    OPEX ya simulados. Usado por las tres `run_monte_carlo*()` — la única
+    Arma el DataFrame de resultados (ingresos, OPEX, EBITDA, Ganancias,
+    flujo neto, VAN neto) a partir de arrays de rendimiento, precio, CAPEX
+    extra y multiplicador de OPEX ya simulados. El flujo replica la hoja
+    Flujo del Excel v2 (ver `flujo_caja_neto()` en src/costos.py): flujo
+    libre del proyecto después de Ganancias, sin financiamiento, con el
+    valor residual de la tierra sumado en el último año. Usado por las tres `run_monte_carlo*()` — la única
     diferencia entre ellas es cómo se generan esos cuatro arrays (muestreo
     directo vs. variables antitéticas).
 
@@ -932,8 +1092,11 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
+    produccion_kg = yields * params.hectareas
     revenue = simulate_revenue(yields, prices, params.hectareas)
-    flujo_neto = flujo_caja_neto(revenue, costos, opex_multiplicador)
+    opex = opex_total(produccion_kg, revenue, costos, opex_multiplicador)
+    flujo = flujo_caja_neto(revenue, opex, costos)
+    flujo_neto = flujo["flujo_neto"]
 
     años = np.arange(1, params.n_años + 1)
     factores_descuento = (1 / (1 + params.tasa_descuento) ** años).reshape(1, -1)
@@ -942,18 +1105,15 @@ def _orquestar_resultado(
     capex_total_usd = costos.capex_inicial + capex_extra_usd  # (n,)
     van_neto_acum = -capex_total_usd.reshape(n, 1) + np.cumsum(vp_neto, axis=1)
 
-    opex_base_por_año = np.array(
-        [costo_operativo_anual(a, costos) for a in range(1, T + 1)]
-    ).reshape(1, T)
-    opex_real = opex_base_por_año * np.asarray(opex_multiplicador).reshape(n, 1)
-
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
         "rendimiento_kg_ha": yields.ravel(),
         "precio_usd_kg":    prices.ravel(),
         "ingreso_usd":      revenue.ravel(),
-        "opex_usd":         opex_real.ravel(),
+        "opex_usd":         opex.ravel(),
+        "ebitda_usd":       flujo["ebitda"].ravel(),
+        "impuesto_ganancias_usd": flujo["impuesto_ganancias"].ravel(),
         "flujo_neto_usd":   flujo_neto.ravel(),
         "vp_neto_usd":      vp_neto.ravel(),
         "van_neto_usd":     van_neto_acum.ravel(),
@@ -969,8 +1129,9 @@ def run_monte_carlo(
     """
     Orquesta la simulación completa y retorna los resultados en formato tabular.
 
-    El VAN se calcula sobre el flujo de caja neto (ingresos - OPEX), no sobre
-    ingresos brutos. El CAPEX inicial se descuenta en el año 0 (factor 1.0):
+    El VAN se calcula sobre el flujo libre del proyecto (ingresos - OPEX -
+    Ganancias + valor residual en el año 20, ver src/costos.py), en USD
+    constantes y a tasa real. El CAPEX inicial se descuenta en el año 0 (factor 1.0):
     solo el componente fijo (`costos.capex_inicial`) tiene efecto -- el
     estocástico (`simulate_capex_extra()`) devuelve cero desde Fase B, ver
     src/costos.py. El OPEX de cada año se escala por un multiplicador
@@ -997,14 +1158,19 @@ def run_monte_carlo(
     -------
     pd.DataFrame con columnas:
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
-        ingreso_usd, opex_usd, flujo_neto_usd, vp_neto_usd, van_neto_usd,
+        ingreso_usd, opex_usd, ebitda_usd, impuesto_ganancias_usd,
+        flujo_neto_usd, vp_neto_usd, van_neto_usd,
         capex_extra_estocastico_usd
     """
     params, costos = _resolver_params_costos(params, costos)
+    if params.deterministico:
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
-    prices = _despachar_precios(params, rng, precio_params)
+    prices = _fijar_precio(params, _despachar_precios(params, rng, precio_params), precio_params)
     capex_extra = simulate_capex_extra(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1034,10 +1200,16 @@ def run_monte_carlo_antitetico(
     estimador (la media), no el resultado esperado.
     """
     params, costos = _resolver_params_costos(params, costos)
+    if params.deterministico:
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields_antitetico(params, rng)
-    prices = _despachar_precios_antitetico(params, rng, precio_params)
+    prices = _fijar_precio(
+        params, _despachar_precios_antitetico(params, rng, precio_params), precio_params
+    )
     capex_extra = simulate_capex_extra_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1081,26 +1253,53 @@ def _tir_vectorizada(
     el año 0 incluido) mediante Newton-Raphson vectorizado.
 
     Retorna NaN en las filas que no convergen (p. ej. si el flujo nunca
-    cambia de signo, la TIR no está definida).
+    cambia de signo, la TIR no está definida). Una fila cuenta como
+    convergida solo si, al final, la tasa quedó estrictamente dentro de los
+    límites del clip [-0.99, 10] y el VAN a esa tasa es ~0 (relativo a la
+    suma de |flujos|). Sin esa verificación, una fila que diverge queda
+    clavada en el límite (el clip anula el paso) y se marcaba como
+    "convergida" con TIR = 1000%: pasaba en simulaciones que nunca
+    recuperan la inversión, e inflaba `tir_media` en src/dataset_ml.py.
     """
     n, T = flujos_con_capex.shape
     t = np.arange(T).reshape(1, T)
     r = np.full(n, tasa_inicial)
-    convergio = np.zeros(n, dtype=bool)
+    limite_inf, limite_sup = -0.99, 10.0
 
+    def _van(tasa: np.ndarray) -> np.ndarray:
+        return np.sum(flujos_con_capex / (1.0 + tasa.reshape(-1, 1)) ** t, axis=1)
+
+    paso = np.zeros(n)
     for _ in range(max_iter):
-        denom = (1.0 + r.reshape(-1, 1)) ** t
-        npv = np.sum(flujos_con_capex / denom, axis=1)
+        npv = _van(r)
         dnpv = np.sum(
             -t * flujos_con_capex / (1.0 + r.reshape(-1, 1)) ** (t + 1), axis=1
         )
         dnpv = np.where(np.abs(dnpv) < 1e-12, np.nan, dnpv)
         paso = np.nan_to_num(npv / dnpv, nan=0.0)
-        r_nuevo = np.clip(r - paso, -0.99, 10.0)
-        convergio |= np.abs(r_nuevo - r) < tol
-        r = r_nuevo
+        r = np.clip(r - paso, limite_inf, limite_sup)
 
-    return np.where(convergio, r, np.nan)
+    escala = np.abs(flujos_con_capex).sum(axis=1)
+    convergio = (
+        (np.abs(paso) < tol)
+        & (r > limite_inf)
+        & (r < limite_sup)
+        & (np.abs(_van(r)) <= 1e-8 * escala)
+    )
+    r = np.where(convergio, r, np.nan)
+
+    # Respaldo por bisección (brentq) para las filas donde Newton no
+    # converge desde `tasa_inicial` pero el VAN sí cambia de signo dentro de
+    # los límites: con años negativos después de la primera cosecha (precio
+    # bajo + vecería) el VAN puede no ser monótono cerca de la tasa inicial.
+    # Son pocas filas, el loop en Python no pesa.
+    a, b = limite_inf + 1e-6, limite_sup
+    for i in np.flatnonzero(~convergio):
+        fila = flujos_con_capex[i]
+        van_fila = lambda x: float(np.sum(fila / (1.0 + x) ** t[0]))  # noqa: E731
+        if np.sign(van_fila(a)) != np.sign(van_fila(b)):
+            r[i] = brentq(van_fila, a, b, xtol=tol)
+    return r
 
 
 def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFrame:

@@ -73,6 +73,52 @@ def calcular_serie_anual(df_mensual: pd.DataFrame) -> pd.Series:
     return anual
 
 
+def deflactar_por_cpi(df_mensual: pd.DataFrame, df_cpi: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pasa el índice de precio mensual a USD constantes del último mes con
+    precio reportado, dividiendo por el CPI-U del mismo mes.
+
+    Se deflacta mes a mes ANTES de anualizar (y no la serie anual ya
+    armada) para que cada precio se divida por el CPI del mes en que se
+    reportó: `calcular_serie_anual()` toma el último mes con dato de cada
+    año, que no siempre es diciembre.
+
+    Parámetros
+    ----------
+    df_mensual : pd.DataFrame
+        Columnas `fecha` e `indice_precio`, salida de `fetch_price_data()`.
+    df_cpi : pd.DataFrame
+        Columnas `fecha` y `cpi`, salida de `fetch_cpi_data()`.
+
+    Huecos internos del CPI (p. ej. oct-2025, que el BLS no publicó por el
+    cierre del gobierno federal de EE.UU.) se completan por interpolación
+    lineal en log(CPI) entre los meses vecinos. Un mes con precio fuera del
+    rango del CPI sigue fallando: eso no se extrapola.
+
+    Retorna
+    -------
+    pd.DataFrame
+        Mismo formato que `df_mensual` (`fecha`, `indice_precio`), con el
+        índice expresado en términos reales. Los meses sin precio quedan NaN.
+    """
+    cpi = df_cpi.set_index("fecha")["cpi"].dropna()
+    grilla = pd.date_range(cpi.index.min(), cpi.index.max(), freq="MS")
+    cpi = np.exp(np.log(cpi.reindex(grilla)).interpolate(limit_area="inside"))
+    precio = df_mensual.set_index("fecha")["indice_precio"]
+
+    cpi_alineado = cpi.reindex(precio.index)
+    faltantes = precio.notna() & cpi_alineado.isna()
+    if faltantes.any():
+        raise ValueError(
+            "Hay meses con precio y sin CPI: "
+            f"{list(precio.index[faltantes].strftime('%Y-%m'))}"
+        )
+
+    cpi_base = cpi_alineado[precio.notna()].iloc[-1]
+    real = precio * cpi_base / cpi_alineado
+    return pd.DataFrame({"fecha": real.index, "indice_precio": real.values})
+
+
 def calcular_retornos_log(serie_anual: pd.Series) -> pd.Series:
     """
     Calcula los retornos logarítmicos anuales: r_t = log(P_t) - log(P_t-1).

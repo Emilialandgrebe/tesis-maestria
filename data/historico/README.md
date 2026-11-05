@@ -1,3 +1,10 @@
+> **ARCHIVADO (2026-11-04).** Estos CSV ya no los lee el motor. Desde la rama
+> `sync-modelo-v2` la fuente de costos es `data/referencia/Modelo financiero -
+> Pistacho Mendoza v2.xlsx`, exportado a `data/modelo_v2/` por
+> `scripts/importar_modelo_v2.py`. Se conservan sin cambios como registro de
+> la transcripción original del plan de negocio (incluidos sus errores conocidos,
+> p. ej. los 72 meses de encargado en `opex_preproductivo.csv`).
+
 # Notas de calidad — dataset financiero (capa 2)
 
 Fuente: `Plan_Negocio_Pistacho_Mendoza` (Google Sheets, 13 hojas), extraído el 2026-07-03.

@@ -12,3 +12,5 @@ SALib==1.4.8
 scikit-learn
 lightgbm
 streamlit
+openpyxl
+pytest
