@@ -809,6 +809,75 @@ P(VAN<0) del escenario base a 120 ha y 14,23% real: **61,8%** (10.000
 simulaciones, OPEX estocástico activado; VAN medio −205.034, mediana
 −561.744).
 
+#### Dos capas de incertidumbre: supuestos (Sobol) y riesgo intrínseco (descomposición por fuente)
+
+La tesis separa dos preguntas que no hay que mezclar:
+
+1. **Incertidumbre de supuestos** (Sobol, `src/sensibilidad.py`): valores
+   que hoy no se conocen con precisión pero que en un proyecto concreto son
+   UNO solo (tasa de descuento, hectáreas, recargo de CAPEX, drift del
+   precio, parámetros de la vecería y del ruido climático). Sobol barre
+   esos valores y mide cuánto mueven el VAN medio o P(VAN<0).
+2. **Riesgo intrínseco** (`scripts/descomponer_varianza.py`): con los
+   supuestos FIJOS en su valor por defecto, la dispersión del VAN que
+   produce el azar dentro de la simulación (precio año a año, clima,
+   vecería, falla de plantas, desvío del OPEX). No se reduce estudiando
+   más: es la variabilidad que el proyecto va a enfrentar igual.
+
+Método de la capa 2: escenario base, 10.000 simulaciones antitéticas,
+semilla 42. Una corrida con todo activo, una apagando cada fuente ("sin X",
+la fuente fijada en su valor esperado) y una dejando solo esa fuente
+("solo X"). `ParametrosMC.fuentes_fijas` hace los sorteos igual y después
+los pisa por su media, así que las fuentes activas reciben los mismos
+números en todas las corridas: las diferencias son efecto de la fuente, no
+ruido de muestreo. Fracción al quitar = 1 − Var(sin X)/Var(todo), incluye
+interacciones, análoga a un ST; fracción sola = Var(solo X)/Var(todo),
+análoga a un S1. IC95% por bootstrap sobre los pares antitéticos. Salida en
+`outputs/descomposicion_varianza_base_{corridas,fracciones}.csv`.
+
+| Corrida | VAN medio | Desvío del VAN | P(VAN<0) |
+|---|---:|---:|---:|
+| Todo activo | −215.542 | 2.037.177 | 61,8% |
+| Sin precio | −218.149 | 464.042 | 67,5% |
+| Sin clima (frío y calor) | −206.579 | 2.026.851 | 61,8% |
+| Sin vecería | −212.388 | 2.026.665 | 61,8% |
+| Sin plantas | −218.830 | 2.003.129 | 61,9% |
+| Sin OPEX | −215.304 | 2.026.626 | 62,0% |
+| Todo fijo | −209.911 | 0 | 100% |
+
+| Fuente | Fracción al quitar (IC95%) | Fracción sola (IC95%) |
+|---|---|---|
+| Precio | 94,8% (94,5–95,1) | 93,6% (92,1–95,1) |
+| Plantas | 3,3% (2,3–4,3) | 2,3% (2,1–2,4) |
+| Clima | 1,0% (0,1–1,9) | 1,4% (1,3–1,5) |
+| Vecería | 1,0% (0,3–1,7) | 0,7% (0,7–0,8) |
+| OPEX | 1,0% (0,6–1,5) | 0,8% (0,8–0,9) |
+
+Lectura:
+
+- **El precio explica ~95% de la varianza del VAN.** Sin precio
+  estocástico el desvío cae de 2,04 M a 0,46 M. Las cuatro fuentes
+  restantes suman ~5% y entre ellas son casi aditivas (la suma de sus
+  "solo X", 5,2%, coincide con la varianza que queda sin precio, 5,2%); la
+  interacción con el precio (rendimiento × precio, Ganancias convexa) es
+  del orden del 1%.
+- **La falla de plantas pesa el triple que la vecería** aunque su desvío
+  por año es menor: es un shock PERSISTENTE (un valor para toda la vida
+  del cultivo), mientras que la vecería alterna y se cancela dentro de los
+  14 años productivos. Es la misma conclusión que el Sobol de riesgo
+  (vecería ≈ 0): no es un problema de rango, es la estructura del modelo.
+- **P(VAN<0) no es una medida de varianza.** Con VAN medio negativo, sacar
+  dispersión SUBE la probabilidad de pérdida (sin precio: 67,5%; todo
+  fijo: 100%). Por eso la descomposición se hace sobre la varianza y
+  P(VAN<0) se reporta solo como descripción de cada corrida.
+- **Control**: la corrida "todo fijo" da −209.911, que es el VAN
+  determinístico del Excel (−240.830) más el efecto del momento de la
+  vecería (+30.919) ya medido en la sección anterior. Cierra exacto.
+- El VAN medio con todo activo (−215.542) difiere del −205.034 de la tabla
+  de arriba porque aquel es `run_monte_carlo` (muestreo directo) y este
+  `run_monte_carlo_antitetico`; la diferencia está dentro del IC95% del
+  muestreo directo (±39.154).
+
 ## Problemas abiertos
 
 ### ⚠️ EL CAPEX ESTÁ INCOMPLETO — faltan Red antigranizo y Paneles solares — el VAN/P(VAN<0) actuales NO son el número final

@@ -293,6 +293,28 @@ def _muestrear_clima_correlacionado_antitetico(
     return horas, tmax_verano
 
 
+def _esperanza_factor_frio(media: float, std: float) -> float:
+    """E[factor de frío] con horas ~ Normal(media, std): integración numérica
+    de la función de transferencia (el ruido Beta posterior de
+    `_muestrear_beta_por_media` no cambia la media, por construcción:
+    E[Beta(m*k, (1-m)*k)] = m)."""
+    return integrate.quad(
+        lambda h: float(_media_factor_frio(np.array([h]))[0]) * norm.pdf(h, media, std),
+        media - 6 * std,
+        media + 6 * std,
+    )[0]
+
+
+def _esperanza_factor_calor(media: float, std: float) -> float:
+    """E[factor de calor] con tmax de verano ~ Normal(media, std). Mismo
+    criterio que `_esperanza_factor_frio`."""
+    return integrate.quad(
+        lambda t: float(_media_factor_calor(np.array([t]))[0]) * norm.pdf(t, media, std),
+        media - 6 * std,
+        media + 6 * std,
+    )[0]
+
+
 def _producto_esperado_factores() -> float:
     """
     Producto de los valores esperados de los factores estocásticos de
@@ -302,27 +324,10 @@ def _producto_esperado_factores() -> float:
     (ver `_media_veceria()`). Se usa para derivar RENDIMIENTO_IDEAL_KG_HA a
     partir de RENDIMIENTO_VALIDADO_KG_HA — ver el docstring de esa constante.
 
-    Frío y calor: integración numérica de la función de transferencia
-    correspondiente contra la densidad Normal calibrada (el ruido Beta
-    posterior de `_muestrear_beta_por_media` no cambia la media, por
-    construcción: E[Beta(m*k, (1-m)*k)] = m — no hace falta simularlo acá).
-
     Supervivencia: media de 1 - Beta(alpha, beta) = 1 - alpha / (alpha + beta).
     """
-    e_frio = integrate.quad(
-        lambda h: float(_media_factor_frio(np.array([h]))[0])
-        * norm.pdf(h, _HORAS_FRIO_MEDIA, _HORAS_FRIO_STD),
-        _HORAS_FRIO_MEDIA - 6 * _HORAS_FRIO_STD,
-        _HORAS_FRIO_MEDIA + 6 * _HORAS_FRIO_STD,
-    )[0]
-
-    e_calor = integrate.quad(
-        lambda t: float(_media_factor_calor(np.array([t]))[0])
-        * norm.pdf(t, _CALOR_VERANO_MEDIA, _CALOR_VERANO_STD),
-        _CALOR_VERANO_MEDIA - 6 * _CALOR_VERANO_STD,
-        _CALOR_VERANO_MEDIA + 6 * _CALOR_VERANO_STD,
-    )[0]
-
+    e_frio = _esperanza_factor_frio(_HORAS_FRIO_MEDIA, _HORAS_FRIO_STD)
+    e_calor = _esperanza_factor_calor(_CALOR_VERANO_MEDIA, _CALOR_VERANO_STD)
     e_supervivencia = 1.0 - _PLANTAS_ALPHA / (_PLANTAS_ALPHA + _PLANTAS_BETA)
 
     return e_frio * e_calor * e_supervivencia
@@ -428,6 +433,17 @@ class ParametrosMC:
     # análisis de riesgo.
     deterministico: bool = False
 
+    # Fuentes estocásticas reemplazadas por su valor esperado, para
+    # descomponer la varianza del VAN por fuente (scripts/descomponer_varianza.py).
+    # Valores: "precio" (trayectoria del Excel, que es E[precio] con c=0),
+    # "clima" (factores de frío y calor en su media), "veceria" (factor 1) y
+    # "plantas" (supervivencia media). Los sorteos se hacen igual y después
+    # se pisan: el consumo de `rng` no cambia, así que las fuentes que quedan
+    # activas reciben exactamente los mismos números en todas las corridas
+    # (números aleatorios comunes). El OPEX se apaga con
+    # `capex_opex_estocastico=False`.
+    fuentes_fijas: frozenset[str] = frozenset()
+
     semilla: int = 42
 
 
@@ -486,6 +502,55 @@ def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarr
         (n, T),
     )
     return np.where(es_bajo, factores_bajos, 1.0) / _media_veceria(params)
+
+
+FUENTES_ESTOCASTICAS = ("precio", "clima", "veceria", "plantas")
+
+
+def _validar_fuentes_fijas(params: ParametrosMC) -> None:
+    desconocidas = set(params.fuentes_fijas) - set(FUENTES_ESTOCASTICAS)
+    if desconocidas:
+        raise ValueError(
+            f"fuentes_fijas admite {FUENTES_ESTOCASTICAS}, recibido {sorted(desconocidas)}"
+        )
+
+
+def _combinar_factores(
+    params: ParametrosMC,
+    curva_base: np.ndarray,
+    factor_veceria: np.ndarray,
+    factor_frio: np.ndarray,
+    factor_calor: np.ndarray,
+    supervivencia: np.ndarray,
+) -> np.ndarray:
+    """Producto de la curva por los factores, con las fuentes de
+    `params.fuentes_fijas` reemplazadas por su valor esperado."""
+    fijas = params.fuentes_fijas
+    if "veceria" in fijas:
+        factor_veceria = np.ones_like(factor_veceria)
+    if "clima" in fijas:
+        factor_frio = np.full_like(
+            factor_frio, _esperanza_factor_frio(params.horas_frio_media, params.horas_frio_std)
+        )
+        factor_calor = np.full_like(
+            factor_calor, _esperanza_factor_calor(params.calor_verano_media, params.calor_verano_std)
+        )
+    if "plantas" in fijas:
+        supervivencia = np.full_like(
+            supervivencia, 1.0 - params.plantas_alpha / (params.plantas_alpha + params.plantas_beta)
+        )
+    return np.maximum(
+        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    )
+
+
+def _fijar_precio(params: ParametrosMC, prices: np.ndarray) -> np.ndarray:
+    """Si "precio" está en `params.fuentes_fijas`, reemplaza los precios
+    simulados por la trayectoria del Excel del escenario."""
+    if "precio" not in params.fuentes_fijas:
+        return prices
+    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    return np.broadcast_to(trayectoria, prices.shape).copy()
 
 
 # ---------------------------------------------------------------------------
@@ -611,8 +676,8 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     u_supervivencia = _generar_uniformes_antiteticos(n, (1,), rng)
     supervivencia = 1.0 - beta_dist.ppf(u_supervivencia, params.plantas_alpha, params.plantas_beta)
 
-    return np.maximum(
-        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    return _combinar_factores(
+        params, curva_base, factor_veceria, factor_frio, factor_calor, supervivencia
     )
 
 
@@ -718,8 +783,8 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     # Falla de plantas: mismo valor para toda la vida del cultivo (decisión de campo)
     supervivencia = 1.0 - rng.beta(params.plantas_alpha, params.plantas_beta, (n, 1))
 
-    return np.maximum(
-        curva_base * factor_veceria * factor_frio * factor_calor * supervivencia, 0.0
+    return _combinar_factores(
+        params, curva_base, factor_veceria, factor_frio, factor_calor, supervivencia
     )
 
 
@@ -1095,10 +1160,11 @@ def run_monte_carlo(
     if params.deterministico:
         yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
         return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
-    prices = _despachar_precios(params, rng, precio_params)
+    prices = _fijar_precio(params, _despachar_precios(params, rng, precio_params))
     capex_extra = simulate_capex_extra(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1131,10 +1197,11 @@ def run_monte_carlo_antitetico(
     if params.deterministico:
         yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
         return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields_antitetico(params, rng)
-    prices = _despachar_precios_antitetico(params, rng, precio_params)
+    prices = _fijar_precio(params, _despachar_precios_antitetico(params, rng, precio_params))
     capex_extra = simulate_capex_extra_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
