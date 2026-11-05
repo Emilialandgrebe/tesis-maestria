@@ -1039,6 +1039,20 @@ principal: **62,4%** (10.000 simulaciones, `run_monte_carlo`; VAN medio
 
 ## Problemas abiertos
 
+### Pendiente para la corrida final: Sobol con n_base = 256
+
+Con n_base = 128 (Sobol de 8 variables, precio en niveles, 2026-11-04), en
+el escenario pesimista los IC bootstrap de tasa_descuento y
+precio_nivel_mult se superponen: ST 0,42 (±0,13) contra 0,37 (±0,15) sobre
+el VAN medio y 0,72 (±0,31) contra 0,52 (±0,25) sobre P(VAN<0). No se puede
+afirmar cuál de los dos pesa más en ese escenario. En la corrida final,
+regenerar los dos parquets con `n_base=256` (2.560 evaluaciones por
+escenario y métrica, ~45 minutos con las dos métricas en paralelo); el
+ancho de los IC debería bajar en un factor de ~√2. En P(VAN<0) del
+pesimista parte del ruido viene de que muchos puntos dan probabilidad
+cerca de 1; si con 256 los IC siguen superpuestos, reportar que la
+diferencia no se resuelve en vez de subir más n_base.
+
 ### ⚠️ EL CAPEX ESTÁ INCOMPLETO — faltan Red antigranizo y Paneles solares — el VAN/P(VAN<0) actuales NO son el número final
 
 **Superado por la Fase C (2026-11-04):** el CAPEX del Excel v2 ya incluye
