@@ -34,10 +34,10 @@ from src.precio_estocastico import ParametrosPrecioAR1
 # ---------------------------------------------------------------------------
 
 # Mismos rangos que PROBLEMA_SOBOL en src/sensibilidad.py (tasa real
-# 10-18%, 60-180 ha), más dos parámetros que Sobol deja fijos:
-# - p_alto_si_bajo: acá no hay costo adicional en barrerlo también.
-# - precio_drift_anual: drift real ADICIONAL sobre la trayectoria de precio
-#   del Excel (ver ParametrosPrecioAR1.c en src/precio_estocastico.py).
+# 10-18%, 60-180 ha, drift y nivel del precio), más p_alto_si_bajo, que
+# Sobol deja fijo (acá no hay costo adicional en barrerlo también).
+# precio_drift_anual es un drift real ADICIONAL sobre la trayectoria de
+# precio del Excel (ver ParametrosPrecioAR1.c en src/precio_estocastico.py).
 ESPACIO_PARAMETROS: dict[str, tuple[float, float]] = {
     "tasa_descuento":         (0.10, 0.18),
     "hectareas":              (60.0, 180.0),
@@ -51,6 +51,9 @@ ESPACIO_PARAMETROS: dict[str, tuple[float, float]] = {
     # el precio hacia arriba. ±1,25% real anual cubre el drift estimado
     # sobre la serie real (-0,15%) con margen para su incertidumbre.
     "precio_drift_anual":     (-0.0125, 0.0125),
+    # Multiplicador de toda la trayectoria base de precio, mismo rango que
+    # en Sobol (ver PROBLEMA_SOBOL en src/sensibilidad.py).
+    "precio_nivel_mult":      (0.8, 1.2),
 }
 
 NOMBRES_PARAMETROS = list(ESPACIO_PARAMETROS.keys())
@@ -119,12 +122,13 @@ def evaluar_punto(
     resumen_financiero) con los parámetros de `fila` y resume el resultado en
     los targets del dataset.
 
-    El precio usa el modelo AR(1) sobre retornos calibrado con FRED
+    El precio usa el modelo AR(1) en niveles calibrado con FRED
     (src/precio_estocastico.py), no el triangular independiente viejo. El
     drift (`c`) se barre como parámetro de entrada (`precio_drift_anual`) en
     vez de quedar fijo: no está identificado con precisión (ver
     notas/plan_precio_historico.md, sección 0) y mueve sustancialmente tanto
-    el VAN medio como prob_van_negativo. phi/sigma_eps quedan en su default
+    el VAN medio como prob_van_negativo; lo mismo el nivel de la trayectoria
+    (`precio_nivel_mult`). phi/sigma_eps quedan en su default
     calibrado (no se barren, tienen mejor soporte estadístico).
 
     La semilla se mantiene fija entre puntos (igual que en sensibilidad.py):
@@ -156,6 +160,7 @@ def evaluar_punto(
     precio_params = ParametrosPrecioAR1(
         escenario=fila["escenario"],
         c=fila["precio_drift_anual"],
+        nivel_mult=fila["precio_nivel_mult"],
     )
 
     df = run_monte_carlo_precio_historico(params, costos, precio_params)

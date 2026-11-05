@@ -1,33 +1,44 @@
-"""Simulación de precio del pistacho con memoria: AR(1) sobre retornos log reales.
+"""Simulación de precio del pistacho con memoria: AR(1) en log, calibrado con FRED.
 
 El precio simulado es la trayectoria base del Excel v2 (USD constantes 2026,
 por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
 logarítmico estocástico:
 
-    precio_t = trayectoria_t * exp(d_t - Var[d_t] / 2),    d_t = r_1 + ... + r_t
+    precio_t = nivel_mult * trayectoria_t * exp(d_t - Var[d_t] / 2)
 
-donde los r_t siguen un AR(1) sobre retornos log calibrado con datos reales
-del precio (FRED, serie WPU01190106, DEFLACTADA por CPI-U -- ver
-`src/data/price_features.py::deflactar_por_cpi`). El AR(1) es sobre los
-RETORNOS, no sobre el nivel: el ADF sobre el nivel real tampoco rechaza raíz
-unitaria (p=0.399), así que no hay sustento para reversión a un nivel de
-largo plazo. Es un ARIMA(1,1,0) sobre log(precio real).
+Dos especificaciones de d_t, calibradas sobre la serie FRED WPU01190106
+DEFLACTADA por CPI-U (`src/data/price_features.py::deflactar_por_cpi`),
+con el mismo sigma_eps:
+
+- "niveles" (PRINCIPAL desde 2026-11-04): AR(1) del desvío log respecto de
+  la trayectoria, d_t = phi * d_(t-1) + sigma_eps * Z_t + c (acumulado como
+  c * t), d_0 = 0, phi = PHI_NIVELES. Revierte a la trayectoria (semivida
+  ~4 años); la varianza converge a sigma^2 / (1 - phi^2).
+- "retornos" (escenario de ESTRÉS): AR(1) sobre los retornos log,
+  ARIMA(1,1,0), phi = PHI_RETORNOS. El desvío no revierte y la varianza
+  crece con el horizonte.
+
+El ADF sobre el log del precio real no rechaza raíz unitaria (p=0,55 con
+constante, 0,82 con tendencia), así que los datos no distinguen entre las
+dos. Se eligió "niveles" por plausibilidad: su dispersión estacionaria
+(desvío log 0,26, P95/P5 ~2,4) coincide con el rango histórico de la serie
+(0,23-0,28 y 2,44), mientras que "retornos" llega al año 20 con el doble
+(0,52, P95/P5 5,7). Ver notas/PLAN_TESIS.md.
 
 La tendencia la pone la trayectoria del Excel, no el AR(1): por eso el drift
-`c` vale 0 por defecto. Criterio de VALOR ESPERADO: la trayectoria del Excel
-es la MEDIA del precio simulado, no la mediana. Como d_t es normal,
+`c` vale 0 por defecto. Criterio de VALOR ESPERADO: la trayectoria es la
+MEDIA del precio simulado, no la mediana. Como d_t es normal,
 E[exp(d_t)] = exp(E[d_t] + Var[d_t]/2); restar Var[d_t]/2 (la varianza
-acumulada exacta bajo la dinámica del AR(1), ver `varianza_desvio_log()`)
-deja E[exp(d_t - Var[d_t]/2)] = 1 con c=0 en cada año. La mediana queda
-por debajo de la trayectoria en ese mismo factor. Con c != 0 el precio
-medio es trayectoria * exp(drift acumulado de c): el drift sigue siendo
-un desplazamiento deliberado de la media. El desvío se acumula
-desde el año 1 del proyecto, no desde la primera cosecha: la trayectoria es
-un pronóstico hecho hoy, y la incertidumbre sobre el precio del año 7
-incluye los 7 años que faltan para llegar.
+exacta bajo cada especificación, ver `varianza_desvio_log()`) deja
+E[exp(d_t - Var[d_t]/2)] = 1 con c=0 en cada año. La mediana queda por
+debajo de la trayectoria en ese mismo factor. Con c != 0 el precio medio es
+trayectoria * exp(drift acumulado de c): el drift es un desplazamiento
+deliberado de la media. El desvío arranca en el año 1 del proyecto, no en
+la primera cosecha: la trayectoria es un pronóstico hecho hoy, y la
+incertidumbre sobre el precio del año 7 incluye los 7 años que faltan.
 
 Ver `notebooks/04_calibracion_precio.ipynb` para el diagnóstico de la serie
-nominal y `notas/plan_precio_historico.md` para la justificación del AR(1).
+nominal.
 """
 
 from __future__ import annotations
@@ -39,31 +50,39 @@ import numpy as np
 
 from src.modelo_v2 import cargar_modelo_v2
 
+# AR(1) por OLS sobre log(precio real) anual 1991-2026 con constante y
+# tendencia lineal (la trayectoria del Excel tiene tendencia, así que la
+# reversión es a una senda con pendiente): phi=0,8391 (EE 0,106), semivida
+# ~4 años. Sin tendencia da 0,8761.
+PHI_NIVELES = 0.8391
+
+# AR(1) sobre los retornos log reales (2026-11-04, 1991-2026, n=34):
+# phi=-0.217495 (p=0.218). Sobre la serie NOMINAL era -0.265423.
+PHI_RETORNOS = -0.217495
+
 
 @dataclass
 class ParametrosPrecioAR1:
-    """Parámetros del AR(1) sobre retornos log reales y escenario de trayectoria."""
+    """Parámetros del AR(1) del precio y de su trayectoria base."""
 
     escenario: Literal["pesimista", "base", "optimista"] = "base"
-    # Drift ADICIONAL sobre la trayectoria del Excel, en retorno log real
-    # anual. 0 por defecto: la estimación sobre la serie real 1991-2026 da
-    # c=-0.0015 (indistinguible de cero), y la tendencia ya está en la
-    # trayectoria base. `src/dataset_ml.py` lo barre como input.
+    # Drift real ADICIONAL sobre la trayectoria, en log por año. 0 por
+    # defecto: la estimación sobre la serie real da c=-0.0015
+    # (indistinguible de cero), y la tendencia ya está en la trayectoria.
+    # Sobol y `src/dataset_ml.py` lo barren como supuesto incierto. En
+    # "niveles" desplaza la senda a la que revierte el precio (c * t); en
+    # "retornos" es la constante del AR(1) sobre retornos.
     c: float = 0.0
-    # Reestimados sobre la serie deflactada por CPI-U (2026-11-04, 1991-2026,
-    # n=34): phi=-0.217495 (p=0.218), sigma_eps=0.140922. Los valores
-    # anteriores, sobre la serie NOMINAL, eran phi=-0.265423 y
-    # sigma_eps=0.137358 (con c=0.031127 en la serie completa).
-    phi: float = -0.217495
+    phi: float = PHI_NIVELES
+    # Desvío de los residuos del AR(1) sobre retornos reales; se usa el
+    # mismo en las dos especificaciones (el de niveles da 0,1412).
     sigma_eps: float = 0.140922
-    # "retornos" (default): AR(1) sobre retornos log, ARIMA(1,1,0) -- el
-    # desvío respecto de la trayectoria no revierte. "niveles": AR(1) sobre
-    # el DESVÍO log respecto de la trayectoria, x_t = phi * x_(t-1) +
-    # sigma_eps * Z_t con x_0 = 0, que revierte a la trayectoria del Excel.
-    # Solo para análisis de sensibilidad de la especificación (ver
-    # PHI_NIVELES y notas/PLAN_TESIS.md); con "niveles", `phi` tiene que ser
-    # el de niveles y `c` tiene que valer 0.
-    especificacion: Literal["retornos", "niveles"] = "retornos"
+    # "niveles" (principal) o "retornos" (estrés). `phi` tiene que ser el
+    # de la especificación: ver `precio_retornos_estres()`.
+    especificacion: Literal["retornos", "niveles"] = "niveles"
+    # Multiplicador de TODA la trayectoria base: incertidumbre sobre el
+    # nivel del precio (Sobol y dataset lo barren en 0,8-1,2).
+    nivel_mult: float = 1.0
     # Trayectoria base propia (USD/kg por año 1..n), en lugar de la del Excel
     # del `escenario`. None (default) usa la del Excel. Solo para análisis
     # de sensibilidad (p. ej. precio real constante).
@@ -71,21 +90,21 @@ class ParametrosPrecioAR1:
 
     def trayectoria_base(self, n_años: int) -> np.ndarray:
         if self.trayectoria is None:
-            return cargar_modelo_v2().trayectoria_precio(self.escenario, n_años)
-        if len(self.trayectoria) != n_años:
+            base = cargar_modelo_v2().trayectoria_precio(self.escenario, n_años)
+        elif len(self.trayectoria) != n_años:
             raise ValueError(
                 f"trayectoria tiene {len(self.trayectoria)} años, se esperaban {n_años}"
             )
-        return np.asarray(self.trayectoria, dtype=float)
+        else:
+            base = np.asarray(self.trayectoria, dtype=float)
+        return self.nivel_mult * base
 
 
-# AR(1) por OLS sobre log(precio real) anual 1991-2026 con constante y
-# tendencia lineal (la trayectoria del Excel tiene tendencia, así que la
-# reversión es a una senda con pendiente): phi=0,8391 (EE 0,106), semivida
-# ~4 años. Sin tendencia da 0,8761. El ADF sobre el log del nivel no rechaza
-# raíz unitaria (p=0,55 con constante, 0,82 con tendencia): la serie no
-# permite distinguir esta especificación de la de retornos.
-PHI_NIVELES = 0.8391
+def precio_retornos_estres(escenario: str = "base", **kwargs) -> ParametrosPrecioAR1:
+    """Escenario de estrés: AR(1) sobre retornos, sin reversión a la trayectoria."""
+    return ParametrosPrecioAR1(
+        escenario=escenario, phi=PHI_RETORNOS, especificacion="retornos", **kwargs
+    )
 
 
 def varianza_desvio_log(params: ParametrosPrecioAR1, n_años: int) -> np.ndarray:
@@ -118,16 +137,20 @@ def _simular_desvio_log(z: np.ndarray, params: ParametrosPrecioAR1) -> np.ndarra
                                                       largo plazo del AR(1))
         r_t = c + phi * r_(t-1) + sigma_eps * Z_t   (t = 2..n_años)
         d_t = cumsum(r_1..r_t) - Var[d_t] / 2
+
+    o, con `especificacion="niveles"`,
+
+        x_1 = sigma_eps * Z_1,  x_t = phi * x_(t-1) + sigma_eps * Z_t
+        d_t = x_t + c * t - Var[x_t] / 2
     """
     n_simulaciones, n_años = z.shape
     if params.especificacion == "niveles":
-        if params.c != 0:
-            raise ValueError("especificacion='niveles' no admite drift c != 0")
         x = np.empty((n_simulaciones, n_años))
         x[:, 0] = params.sigma_eps * z[:, 0]
         for t in range(1, n_años):
             x[:, t] = params.phi * x[:, t - 1] + params.sigma_eps * z[:, t]
-        return x - varianza_desvio_log(params, n_años).reshape(1, -1) / 2
+        drift = params.c * np.arange(1, n_años + 1)
+        return x + drift - varianza_desvio_log(params, n_años).reshape(1, -1) / 2
     if params.especificacion != "retornos":
         raise ValueError(
             f"especificacion debe ser 'retornos' o 'niveles', recibido {params.especificacion!r}"
@@ -180,7 +203,7 @@ def simulate_prices_ar1(
 ) -> np.ndarray:
     """
     Simula el precio de venta en USD/kg (USD constantes 2026): trayectoria
-    base del escenario por un desvío log AR(1) sobre retornos reales.
+    base del escenario por un desvío log AR(1) (ver `ParametrosPrecioAR1`).
 
     Retorna
     -------

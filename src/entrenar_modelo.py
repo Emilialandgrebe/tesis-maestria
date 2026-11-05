@@ -40,6 +40,7 @@ FEATURES = [
     "p_bajo_si_alto",
     "p_alto_si_bajo",
     "precio_drift_anual",
+    "precio_nivel_mult",
     # "escenario" se agrega aparte, one-hot, ver preparar_features()
 ]
 

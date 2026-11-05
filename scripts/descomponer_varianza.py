@@ -32,16 +32,22 @@ así que hay interacción: la diferencia entre ambas columnas la mide.
 IC95% por bootstrap sobre los PARES antitéticos (fila i con fila i + n/2),
 para no romper la estructura del muestreo.
 
-Con `niveles` como tercer argumento, el precio usa la especificación
-alternativa (AR(1) en niveles del desvío log, que revierte a la trayectoria
-del Excel, con phi = PHI_NIVELES) -- análisis de sensibilidad de la
-especificación, no el default del motor. `niveles_plano` usa la misma
-dinámica en niveles pero con trayectoria REAL CONSTANTE: el promedio de la
-trayectoria del Excel en los años con precio (7-20), para medir cuánto del
-resultado depende de la suba real de la trayectoria.
+Tercer argumento, especificación del precio:
+
+- `niveles` (default): la del motor, AR(1) en niveles que revierte a la
+  trayectoria del Excel.
+- `retornos`: escenario de estrés, AR(1) sobre retornos sin reversión
+  (`precio_retornos_estres()`).
+- `niveles_plano`: niveles con trayectoria REAL CONSTANTE, el promedio de
+  la del Excel en los años con precio (7-20).
+- `niveles_plano_8`: niveles con trayectoria constante en el precio del
+  año 7 (sin la suba real posterior).
+
+Las dos planas miden cuánto del resultado depende de la suba real de la
+trayectoria.
 
 Uso:
-    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [retornos|niveles|niveles_plano]
+    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [niveles|retornos|niveles_plano|niveles_plano_8]
 """
 
 from __future__ import annotations
@@ -65,7 +71,7 @@ from src.monte_carlo import (  # noqa: E402
     run_monte_carlo_antitetico,
 )
 from src.modelo_v2 import cargar_modelo_v2  # noqa: E402
-from src.precio_estocastico import PHI_NIVELES, ParametrosPrecioAR1  # noqa: E402
+from src.precio_estocastico import ParametrosPrecioAR1, precio_retornos_estres  # noqa: E402
 
 FUENTES = (*FUENTES_ESTOCASTICAS, "opex")
 N_BOOTSTRAP = 1_000
@@ -87,26 +93,34 @@ def _van(
     return resumen["van_neto_usd"].to_numpy()
 
 
+def _precio(escenario: str, especificacion: str, n_años: int) -> ParametrosPrecioAR1:
+    if especificacion == "niveles":
+        return ParametrosPrecioAR1(escenario=escenario)
+    if especificacion == "retornos":
+        return precio_retornos_estres(escenario)
+    excel = cargar_modelo_v2().trayectoria_precio(escenario, n_años)
+    con_precio = excel > 0
+    if especificacion == "niveles_plano":
+        nivel = excel[con_precio].mean()
+    elif especificacion == "niveles_plano_8":
+        nivel = excel[con_precio][0]
+    else:
+        raise ValueError(f"especificación desconocida: {especificacion!r}")
+    return ParametrosPrecioAR1(
+        escenario=escenario, trayectoria=tuple(np.where(con_precio, nivel, 0.0))
+    )
+
+
 def descomponer(
     escenario: str = "base",
     n_simulaciones: int = 10_000,
     semilla: int = 42,
-    especificacion: str = "retornos",
+    especificacion: str = "niveles",
 ):
     """Retorna (corridas, fracciones): una fila por corrida con media, desvío
     y P(VAN<0), y una fila por fuente con las dos fracciones de varianza."""
     params = ParametrosMC(n_simulaciones=n_simulaciones, escenario=escenario, semilla=semilla)
-    if especificacion in ("niveles", "niveles_plano"):
-        trayectoria = None
-        if especificacion == "niveles_plano":
-            excel = cargar_modelo_v2().trayectoria_precio(escenario, params.n_años)
-            trayectoria = tuple(np.where(excel > 0, excel[excel > 0].mean(), 0.0))
-        precio_params = ParametrosPrecioAR1(
-            escenario=escenario, phi=PHI_NIVELES, especificacion="niveles",
-            trayectoria=trayectoria,
-        )
-    else:
-        precio_params = ParametrosPrecioAR1(escenario=escenario)
+    precio_params = _precio(escenario, especificacion, params.n_años)
     todas = set(FUENTES)
 
     vans: dict[str, np.ndarray] = {"todo activo": _van(params, set(), precio_params)}
@@ -158,11 +172,11 @@ def descomponer(
 if __name__ == "__main__":
     escenario = sys.argv[1] if len(sys.argv) > 1 else "base"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 10_000
-    especificacion = sys.argv[3] if len(sys.argv) > 3 else "retornos"
+    especificacion = sys.argv[3] if len(sys.argv) > 3 else "niveles"
 
     corridas, fracciones = descomponer(escenario, n, especificacion=especificacion)
 
-    sufijo = escenario if especificacion == "retornos" else f"{escenario}_precio_{especificacion}"
+    sufijo = escenario if especificacion == "niveles" else f"{escenario}_precio_{especificacion}"
     SALIDA.mkdir(exist_ok=True)
     corridas.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_corridas.csv", index=False)
     fracciones.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_fracciones.csv", index=False)

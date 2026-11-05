@@ -31,11 +31,13 @@ if str(_RAIZ) not in sys.path:
 
 from src.costos import ParametrosCostos  # noqa: E402
 from src.monte_carlo import ParametrosMC, resumen_financiero, run_monte_carlo  # noqa: E402
+from src.precio_estocastico import precio_retornos_estres  # noqa: E402
 
 SEMILLA = 42  # fija, igual que el default del motor (reproducibilidad)
 ESCENARIOS = ["pesimista", "base", "optimista"]
 COLOR_ESCENARIO = {"pesimista": "#C44E52", "base": "#4C72B0", "optimista": "#55A868"}
 RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices.parquet"
+_NOMBRE_PRECIO = {"ar1": "AR(1) en niveles", "ar1_retornos": "AR(1) retornos (estrés)", "triangular": "triangular"}
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +87,14 @@ def simular(
         tasa_descuento=tasa_descuento,
         capex_opex_estocastico=capex_opex_estocastico,
         correlacionar_frio_calor=correlacionar_frio_calor,
-        modo_precio=modo_precio,
+        # "ar1_retornos" es el AR(1) de estrés (sobre retornos, sin
+        # reversión): el mismo generador "ar1" del motor con otros parámetros.
+        modo_precio="ar1" if modo_precio == "ar1_retornos" else modo_precio,
         semilla=semilla,
     )
     costos = ParametrosCostos(hectareas=hectareas)
-    df = run_monte_carlo(params, costos)
+    precio_params = precio_retornos_estres(escenario) if modo_precio == "ar1_retornos" else None
+    df = run_monte_carlo(params, costos, precio_params)
     # `resumen_financiero` necesita el MISMO objeto `costos` usado en la corrida
     # (run_monte_carlo sincroniza costos.hectareas con params.hectareas in-place).
     resumen = resumen_financiero(df, costos)
@@ -147,16 +152,19 @@ with st.sidebar:
     )
 
     modo_precio = st.selectbox(
-        "Modelo de precio", options=["ar1", "triangular"], index=0,
-        format_func=lambda m: (
-            "AR(1) sobre retornos, calibrado con FRED" if m == "ar1"
-            else "Triangular independiente por año (naive)"
-        ),
+        "Modelo de precio", options=["ar1", "ar1_retornos", "triangular"], index=0,
+        format_func=lambda m: {
+            "ar1": "AR(1) en niveles, revierte a la trayectoria (principal)",
+            "ar1_retornos": "AR(1) sobre retornos, sin reversión (estrés)",
+            "triangular": "Triangular independiente por año (naive)",
+        }[m],
         help=(
-            "AR(1) (default del motor): proceso con memoria calibrado con "
-            "datos reales de precio del pistacho (FRED, WPU01190106) -- ver "
-            "src/precio_estocastico.py. Modela el riesgo de precio como "
-            "sistemático/persistente, no idiosincrático. "
+            "AR(1) en niveles (default del motor): el precio oscila "
+            "alrededor de la trayectoria del Excel y vuelve a ella (semivida "
+            "~4 años), calibrado con la serie real deflactada de FRED "
+            "(WPU01190106) -- ver src/precio_estocastico.py. "
+            "AR(1) sobre retornos: el desvío no revierte y la dispersión del "
+            "año 20 duplica el rango histórico; se usa como estrés. "
             "Triangular: ESCENARIOS_PRECIO, independiente por año sin "
             "memoria -- el modelo naive anterior, disponible acá solo como "
             "comparación explícita."
@@ -330,14 +338,14 @@ with tab_sobol:
 
         st.caption(
             "Índices de Sobol **totales (ST)** del VAN medio, pre-calculados con "
-            "`src/sensibilidad.py` con `modo_precio=\"ar1\"` (no se recalculan en "
+            "`src/sensibilidad.py` con el AR(1) en niveles (no se recalculan en "
             "vivo). Barras de error = IC bootstrap (`ST_conf`)."
         )
         if modo_precio != "ar1":
             st.info(
-                "El sidebar tiene 'Modelo de precio' en triangular, pero estos "
-                "índices se pre-calcularon con AR(1) -- no recalculan en vivo, "
-                "así que no reflejan el modo triangular seleccionado."
+                "El sidebar tiene otro 'Modelo de precio', pero estos índices "
+                "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
+                "vivo, así que no reflejan el modelo seleccionado."
             )
         fig, ax = plt.subplots(figsize=(8, 3.8))
         ax.barh(
@@ -367,7 +375,7 @@ with tab_cmp:
         f"Los tres escenarios de precio a los parámetros actuales del sidebar "
         f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
         f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
-        f"modelo de precio {'AR(1)' if modo_precio == 'ar1' else 'triangular'}, "
+        f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):
