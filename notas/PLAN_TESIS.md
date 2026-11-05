@@ -1039,6 +1039,41 @@ principal: **62,4%** (10.000 simulaciones, `run_monte_carlo`; VAN medio
 
 ## Problemas abiertos
 
+### Amplitud de la vecería y P90 de producción por encima de 3.000 kg/ha — pendiente de calibrar con los asesores
+
+Detectado al revisar la app (2026-11-04): el P90 de producción en la meseta
+llega a ~3.600 kg/ha (años 12-20, 10.000 simulaciones: media 2.597, P50
+2.453, P90 3.638, P99 3.846, máximo 3.914; el 35% de los años-simulación
+supera 3.000), por encima de los 3.000 kg/ha de plena producción del Excel.
+**La media no cambia**: coincide con la del Excel (0,867 × 3.000 = 2.600).
+
+De dónde sale:
+
+1. **Clima**: los factores de frío y calor solo penalizan (valen 1 en un
+   año típico o mejor), con media 0,895 y 0,968. Para que la media cierre,
+   la curva se normaliza a 3.811 kg/ha al 100% (`RENDIMIENTO_IDEAL_KG_HA`),
+   así que un año de buen clima da ~3.300 × 0,91 de supervivencia ≈ 3.000.
+   Sin vecería, el 26% de los años ya supera 3.000.
+2. **Vecería**: normalizada a media 1, el año alto vale ×1,19 y el bajo
+   ×0,77. La relación **año alto / año bajo es ≈ 1,6× en el modelo**
+   (factor bajo Uniforme(0,60; 0,70) respecto del alto), contra **≈ 1,33×
+   implícito en el Excel** (su meseta va de 0,75 a 1,0).
+
+Pendiente de definir con los asesores agronómicos (Facundo y Patricio):
+
+- Si los 3.000 kg/ha del Excel son el **promedio** de una finca madura o
+  un **techo** (año alto con buen clima). Si son promedio, superarlos en un
+  año alto es esperable; si son techo, el modelo los excede hasta ~30%.
+- La relación año alto / año bajo en fincas maduras de la zona, para
+  calibrar `veceria_factor_min/max` (y, si hace falta, la precisión del
+  ruido climático).
+
+Con eso, recalibrar la AMPLITUD (vecería y clima) manteniendo la media en
+2.600, en lugar de truncar en 3.000: el truncamiento baja la media (habría
+que reescalar) y acumula probabilidad justo en el tope. No se cambió nada
+todavía; cualquier recalibración mueve el desvío del VAN y P(VAN<0) y obliga
+a regenerar Sobol, dataset y surrogates.
+
 ### Pendiente para la corrida final: Sobol con n_base = 256
 
 Con n_base = 128 (Sobol de 8 variables, precio en niveles, 2026-11-04), en
