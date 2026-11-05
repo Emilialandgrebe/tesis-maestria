@@ -773,7 +773,9 @@ con n_base=128 y 1.000 simulaciones por evaluación, dataset 800+200 puntos
 LHS por escenario):
 
 Sobol, índice total ST (ranking igual en los tres escenarios y en las dos
-métricas: tasa > hectáreas > capex_extra_pct > resto ≈ 0):
+métricas: tasa > hectáreas > capex_extra_pct > resto ≈ 0). *Superado: esta
+corrida es con el precio sobre retornos y sin drift ni nivel de precio en
+Sobol; ver "Especificación del precio" más abajo para la vigente*:
 
 | Parámetro | VAN medio pes. / base / opt. | P(VAN<0) pes. / base / opt. |
 |---|---|---|
@@ -815,8 +817,8 @@ La tesis separa dos preguntas que no hay que mezclar:
 
 1. **Incertidumbre de supuestos** (Sobol, `src/sensibilidad.py`): valores
    que hoy no se conocen con precisión pero que en un proyecto concreto son
-   UNO solo (tasa de descuento, hectáreas, recargo de CAPEX, drift del
-   precio, parámetros de la vecería y del ruido climático). Sobol barre
+   UNO solo (tasa de descuento, hectáreas, recargo de CAPEX, drift y nivel
+   del precio, parámetros de la vecería y del ruido climático). Sobol barre
    esos valores y mide cuánto mueven el VAN medio o P(VAN<0).
 2. **Riesgo intrínseco** (`scripts/descomponer_varianza.py`): con los
    supuestos FIJOS en su valor por defecto, la dispersión del VAN que
@@ -833,34 +835,40 @@ números en todas las corridas: las diferencias son efecto de la fuente, no
 ruido de muestreo. Fracción al quitar = 1 − Var(sin X)/Var(todo), incluye
 interacciones, análoga a un ST; fracción sola = Var(solo X)/Var(todo),
 análoga a un S1. IC95% por bootstrap sobre los pares antitéticos. Salida en
-`outputs/descomposicion_varianza_base_{corridas,fracciones}.csv`.
+`outputs/descomposicion_varianza_base_{corridas,fracciones}.csv` (precio en
+niveles, el default) y `..._base_precio_retornos_*.csv` (estrés).
 
-| Corrida | VAN medio | Desvío del VAN | P(VAN<0) |
-|---|---:|---:|---:|
-| Todo activo | −215.542 | 2.037.177 | 61,8% |
-| Sin precio | −218.149 | 464.042 | 67,5% |
-| Sin clima (frío y calor) | −206.579 | 2.026.851 | 61,8% |
-| Sin vecería | −212.388 | 2.026.665 | 61,8% |
-| Sin plantas | −218.830 | 2.003.129 | 61,9% |
-| Sin OPEX | −215.304 | 2.026.626 | 62,0% |
-| Todo fijo | −209.911 | 0 | 100% |
+| Corrida | Niveles (principal): desvío / P(VAN<0) | Retornos (estrés): desvío / P(VAN<0) |
+|---|---:|---:|
+| Todo activo | 1.064.662 / 62,2% | 2.037.177 / 61,8% |
+| Sin precio | 464.042 / 67,5% | 464.042 / 67,5% |
+| Sin clima (frío y calor) | 1.039.339 / 61,9% | 2.026.851 / 61,8% |
+| Sin vecería | 1.048.160 / 62,3% | 2.026.665 / 61,8% |
+| Sin plantas | 1.014.896 / 62,6% | 2.003.129 / 61,9% |
+| Sin OPEX | 1.047.860 / 62,1% | 2.026.626 / 62,0% |
+| Todo fijo | 0 / 100% | 0 / 100% |
 
-| Fuente | Fracción al quitar (IC95%) | Fracción sola (IC95%) |
-|---|---|---|
-| Precio | 94,8% (94,5–95,1) | 93,6% (92,1–95,1) |
-| Plantas | 3,3% (2,3–4,3) | 2,3% (2,1–2,4) |
-| Clima | 1,0% (0,1–1,9) | 1,4% (1,3–1,5) |
-| Vecería | 1,0% (0,3–1,7) | 0,7% (0,7–0,8) |
-| OPEX | 1,0% (0,6–1,5) | 0,8% (0,8–0,9) |
+VAN medio con todo activo: −221.514 (niveles) y −215.542 (retornos).
+
+| Fuente | Niveles: al quitar (IC95%) | Niveles: sola | Retornos: al quitar (IC95%) | Retornos: sola |
+|---|---|---|---|---|
+| Precio | 81,0% (80,0–82,0) | 79,9% | 94,8% (94,5–95,1) | 93,6% |
+| Plantas | 9,1% (7,8–10,6) | 8,3% | 3,3% (2,3–4,3) | 2,3% |
+| Clima | 4,7% (3,6–5,8) | 5,1% | 1,0% (0,1–1,9) | 1,4% |
+| OPEX | 3,1% (2,2–4,0) | 3,0% | 1,0% (0,6–1,5) | 0,8% |
+| Vecería | 3,1% (2,1–4,0) | 2,7% | 1,0% (0,3–1,7) | 0,7% |
 
 Lectura:
 
-- **El precio explica ~95% de la varianza del VAN.** Sin precio
-  estocástico el desvío cae de 2,04 M a 0,46 M. Las cuatro fuentes
-  restantes suman ~5% y entre ellas son casi aditivas (la suma de sus
-  "solo X", 5,2%, coincide con la varianza que queda sin precio, 5,2%); la
-  interacción con el precio (rendimiento × precio, Ganancias convexa) es
-  del orden del 1%.
+- **El precio explica ~80% de la varianza del VAN** con la especificación
+  principal (95% con la de estrés). Sin precio estocástico el desvío cae
+  de 1,06 M a 0,46 M. Las cuatro fuentes restantes son casi aditivas entre
+  ellas (la suma de sus "solo X" coincide con la varianza que queda sin
+  precio); la interacción con el precio (rendimiento × precio, Ganancias
+  convexa) es del orden del 1%. Con niveles pesan más en proporción porque
+  la varianza total es la mitad, no porque crezcan en términos absolutos:
+  las corridas "solo X" de rendimiento y OPEX son idénticas en las dos
+  especificaciones.
 - **La falla de plantas pesa el triple que la vecería** aunque su desvío
   por año es menor: es un shock PERSISTENTE (un valor para toda la vida
   del cultivo), mientras que la vecería alterna y se cancela dentro de los
@@ -873,40 +881,43 @@ Lectura:
 - **Control**: la corrida "todo fijo" da −209.911, que es el VAN
   determinístico del Excel (−240.830) más el efecto del momento de la
   vecería (+30.919) ya medido en la sección anterior. Cierra exacto.
-- El VAN medio con todo activo (−215.542) difiere del −205.034 de la tabla
-  de arriba porque aquel es `run_monte_carlo` (muestreo directo) y este
-  `run_monte_carlo_antitetico`; la diferencia está dentro del IC95% del
-  muestreo directo (±39.154).
 
-#### Sensibilidad a la especificación del precio (pendiente de decidir cuál queda como principal)
+#### Especificación del precio: AR(1) en niveles como principal (decisión 2026-11-04)
 
-Análisis de sensibilidad, SIN cambiar el default del motor (sigue siendo
-el AR(1) sobre retornos). Variantes, todas con sigma_eps = 0,1409 y media
-igual a la trayectoria base (corrección de convexidad con la varianza
-cerrada de cada una):
+**Decisión:** la especificación principal del precio es el AR(1) en
+niveles (phi = 0,839). El AR(1) sobre retornos queda como escenario de
+estrés (`precio_retornos_estres()` en `src/precio_estocastico.py`, opción
+"estrés" en la app). Las dos usan sigma_eps = 0,1409 y tienen media igual a
+la trayectoria base (corrección de convexidad con la varianza cerrada de
+cada una).
 
-- **Retornos** (default): ARIMA(1,1,0), phi = −0,217. El desvío respecto de
-  la trayectoria no revierte: la varianza crece con el horizonte.
-- **Niveles**: AR(1) del desvío log respecto de la trayectoria del Excel,
-  x_t = phi·x_(t−1) + sigma·Z_t, x_0 = 0, phi = 0,839 (`PHI_NIVELES`, OLS
-  sobre log del precio real 1991-2026 con constante y tendencia, EE 0,106,
-  semivida ~4 años; sin tendencia da 0,876). El ADF no rechaza raíz
-  unitaria en el log del nivel (p = 0,55 / 0,82): con 36 años la serie no
-  permite elegir entre las dos especificaciones.
-- **Niveles con precio plano**: misma dinámica, trayectoria real constante
-  igual al promedio de la del Excel en los años 7-20 (10,04 USD/kg).
-- Control adicional: niveles con precio plano en 8 USD/kg (el precio del
-  año 7 sin la suba real posterior).
+- **Niveles** (principal): AR(1) del desvío log respecto de la trayectoria
+  del Excel, x_t = phi·x_(t−1) + sigma·Z_t, x_0 = 0, phi = 0,839
+  (`PHI_NIVELES`, OLS sobre log del precio real 1991-2026 con constante y
+  tendencia, EE 0,106, semivida ~4 años; sin tendencia da 0,876). El drift
+  `c` desplaza la senda a la que revierte (c·t) y `nivel_mult` la escala
+  entera.
+- **Retornos** (estrés): ARIMA(1,1,0), phi = −0,217 (`PHI_RETORNOS`). El
+  desvío respecto de la trayectoria no revierte: la varianza crece con el
+  horizonte.
 
-`ParametrosPrecioAR1.especificacion` y `.trayectoria` (solo para estos
-análisis); `scripts/descomponer_varianza.py base 10000 {retornos,niveles,niveles_plano}`.
+**Criterio de elección.** Las dos especificaciones son indistinguibles por
+test de raíz unitaria: el ADF sobre el log del precio real no rechaza raíz
+unitaria (p = 0,55 con constante, 0,82 con tendencia), pero con 36 años de
+datos anuales tampoco tiene potencia para rechazarla frente a un AR(1)
+estacionario con phi ≈ 0,84. Como los datos no deciden, se elige por
+**plausibilidad frente al rango histórico**: la dispersión estacionaria de
+niveles coincide con la que la serie mostró en 36 años, mientras que la de
+retornos la duplica en el año 20 (tabla de abajo). La de retornos sigue
+siendo útil como estrés: representa un mercado que cambia de nivel en
+forma permanente.
 
 **Plausibilidad del precio simulado** (base, 10.000 antitéticas, USD/kg):
 
 | Especificación | Año 7 P5 / P50 / P95 | Año 12 P5 / P50 / P95 | Año 20 P5 / P50 / P95 | P95/P5 año 20 |
 |---|---|---|---|---|
-| Retornos | 4,52 / 7,61 / 12,81 | 4,65 / 9,20 / 18,20 | 4,22 / 10,03 / 23,86 | 5,66 |
-| Niveles | 5,13 / 7,76 / 11,74 | 6,32 / 9,67 / 14,82 | 7,20 / 11,12 / 17,17 | 2,38 |
+| Niveles (principal) | 5,13 / 7,76 / 11,74 | 6,32 / 9,67 / 14,82 | 7,20 / 11,12 / 17,17 | 2,38 |
+| Retornos (estrés) | 4,52 / 7,61 / 12,81 | 4,65 / 9,20 / 18,20 | 4,22 / 10,03 / 23,86 | 5,66 |
 | Niveles, plano 10,04 | 6,43 / 9,73 / 14,73 | 6,34 / 9,71 / 14,87 | 6,29 / 9,70 / 14,98 | 2,38 |
 
 Serie FRED WPU01190106 deflactada por CPI-U, anual 1991-2026 (índice, no
@@ -915,51 +926,116 @@ la serie 2,95 (mínimo 1996, máximo 2014); P5-P95 del nivel respecto de su
 media 0,66-1,61 (cociente 2,44); desvío del log del nivel 0,28 (0,23 sin
 tendencia); máximo/mínimo en ventanas de 14 años: mediana 1,96 (1,50-2,66).
 
+- Con **niveles**, la dispersión estacionaria (desvío log 0,26, P95/P5 ≈
+  2,4) coincide con la histórica (0,23-0,28 y 2,44).
 - Con **retornos**, la dispersión entre escenarios en el año 20 (P95/P5 =
   5,7, desvío log 0,52) duplica la que la serie mostró en 36 años (2,95
   entre su mínimo y su máximo; desvío log 0,28). El P95 del año 20 (23,9
   USD/kg) es el doble de la trayectoria.
-- Con **niveles**, la dispersión estacionaria (desvío log 0,26, P95/P5 ≈
-  2,4) coincide con la histórica (0,23-0,28 y 2,44).
 - Dentro de cada trayectoria simulada (máximo/mínimo en los años 7-20),
-  las dos especificaciones dan algo parecido a la historia (mediana 1,81
-  retornos, 1,89 niveles, contra 1,96 histórico): la diferencia no está en
+  las dos especificaciones dan algo parecido a la historia (mediana 1,89
+  niveles, 1,81 retornos, contra 1,96 histórico): la diferencia no está en
   cuánto oscila el precio, sino en que con retornos el nivel se aleja de la
   trayectoria y no vuelve.
 - Salvedad: la comparación asume que la dispersión histórica en el tiempo
   representa la dispersión entre escenarios futuros, y la serie tiene solo
   36 años de un mercado angosto (con años sin dato rellenados hacia
   adelante).
-- **La trayectoria del Excel sube 44% real** (8 → 11,5 USD/kg entre los
-  años 7 y 20, ~2,8% anual), contra un drift real estimado de −0,15%
-  anual en la serie.
 
-**VAN y descomposición por especificación** (base, 120 ha, 14,23% real):
+**Monte Carlo por escenario** (10.000 simulaciones, `run_monte_carlo`,
+120 ha, 14,23% real, OPEX estocástico; `outputs/tabla_mc_escenarios.csv`):
 
-| Especificación | VAN medio | Desvío del VAN | P(VAN<0) | Fracción del precio al quitar (IC95%) | Fracción del precio sola |
-|---|---:|---:|---:|---|---|
-| Retornos (default) | −215.542 | 2.037.177 | 61,8% | 94,8% (94,5–95,1) | 93,6% |
-| Niveles | −221.514 | 1.064.662 | 62,2% | 81,0% (80,0–82,0) | 79,9% |
-| Niveles, plano 10,04 | −108.281 | 1.089.183 | 57,9% | 81,0% (80,0–82,0) | 79,7% |
-| Control: niveles, plano 8,00 | −1.123.492 | 878.834 | 89,5% | — | — |
+| Escenario | Precio | VAN determinístico | VAN medio (IC95%) | P10 / P50 / P90 | Desvío | P(VAN<0) | TIR mediana |
+|---|---|---:|---:|---|---:|---:|---:|
+| Pesimista | Niveles | −1.501.858 | −1.486.907 (±15.646) | −2.447.751 / −1.556.661 / −439.028 | 798.249 | **95,6%** | 9,15% |
+| Pesimista | Retornos | −1.501.858 | −1.481.896 (±29.629) | −3.128.807 / −1.741.256 / 501.354 | 1.511.699 | 85,3% | 8,34% |
+| Base | Niveles | −240.830 | −216.067 (±20.700) | −1.475.633 / −314.293 / 1.188.499 | 1.056.121 | **62,4%** | 13,36% |
+| Base | Retornos | −240.830 | −205.034 (±39.446) | −2.369.385 / −561.744 / 2.433.830 | 2.012.572 | 61,8% | 12,62% |
+| Optimista | Niveles | 1.257.393 | 1.295.282 (±26.839) | −332.706 / 1.172.140 / 3.118.869 | 1.369.336 | **16,7%** | 17,03% |
+| Optimista | Retornos | 1.257.393 | 1.312.062 (±51.246) | −1.495.845 / 836.447 / 4.736.011 | 2.614.614 | 34,5% | 16,32% |
 
-Con niveles, las fuentes de rendimiento ganan peso relativo (plantas 9,1%,
-clima 4,7%, vecería 3,1%, OPEX 3,1% al quitar) porque la varianza total se
-reduce a la mitad, no porque crezcan en términos absolutos.
+- El VAN medio casi no depende de la especificación (las dos tienen la
+  misma media de precio); el desvío se reduce a la mitad con niveles.
+- **P(VAN<0) del base casi no cambia** (62,4% contra 61,8%) porque su VAN
+  medio está cerca de cero: ahí la probabilidad la fija la media, no el
+  ancho. **En los extremos sí cambia mucho**: con menos dispersión, el
+  pesimista queda casi seguro en pérdida (95,6% contra 85,3%) y el
+  optimista casi seguro en ganancia (16,7% contra 34,5%).
+- La TIR mediana sube con niveles (13,4% contra 12,6% en el base) porque
+  con retornos la mediana del precio cae más por debajo de la media
+  (corrección de convexidad mayor).
 
-Lectura:
+**Sensibilidad al nivel de precio** (base, precio en niveles, 10.000
+antitéticas; `scripts/descomponer_varianza.py base 10000
+{niveles,niveles_plano,niveles_plano_8}`):
 
-- La especificación cambia la **dispersión** (el desvío del VAN se reduce
-  a la mitad con niveles) pero casi no cambia el **VAN medio ni
-  P(VAN<0)** (61,8% contra 62,2%). Con media del VAN cerca de cero y
-  distribución aproximadamente simétrica alrededor de ella, P(VAN<0) la
-  fija la media, no el ancho.
-- Lo que mueve P(VAN<0) es el **nivel de la trayectoria**. Con el mismo
-  precio promedio pero sin pendiente (10,04 plano) el VAN mejora +113.000:
-  adelanta precio a los años de menos descuento. Sin la suba real (plano
-  en 8 USD/kg), el VAN medio cae a −1,12 M y P(VAN<0) sube a 89,5%. El
-  resultado del proyecto depende mucho más del supuesto de suba real del
-  precio que de cómo se modele el ruido alrededor de ella.
+| Trayectoria de precio | VAN medio | Desvío del VAN | P(VAN<0) | Fracción del precio al quitar (IC95%) |
+|---|---:|---:|---:|---|
+| Excel (8 → 11,5 USD/kg, +44% real) | −221.514 | 1.064.662 | 62,2% | 81,0% (80,0–82,0) |
+| Plana en 10,04 (promedio años 7-20) | −108.281 | 1.089.183 | 57,9% | 81,0% (80,0–82,0) |
+| Plana en 8,00 (año 7, sin suba real) | −1.123.492 | 878.834 | 89,5% | 80,0% (79,0–81,0) |
+
+- La trayectoria del Excel sube 44% real (8 → 11,5 USD/kg entre los años
+  7 y 20, ~2,8% anual), contra un drift real estimado de −0,15% anual en
+  la serie.
+- Con el mismo precio promedio pero sin pendiente (plana en 10,04) el VAN
+  mejora +113.000: adelanta precio a los años de menos descuento.
+- **Sin la suba real** (plana en 8,00) el VAN medio cae a −1,12 M y
+  P(VAN<0) sube a 89,5%. El resultado del proyecto depende mucho más del
+  supuesto de suba real del precio que de cómo se modele el ruido alrededor
+  de ella. Por eso el nivel de la trayectoria entra a Sobol como
+  `precio_nivel_mult` (0,8-1,2, ver abajo).
+
+**Derivados regenerados con la especificación en niveles** (2026-11-04):
+
+Sobol con 8 variables (suma `precio_drift_anual` ±1,25% y
+`precio_nivel_mult` 0,8-1,2; n_base=128, 1.280 evaluaciones por escenario,
+1.000 simulaciones cada una). Índice total ST (IC bootstrap entre
+paréntesis para las tres primeras):
+
+| Parámetro | VAN medio pes. / base / opt. | P(VAN<0) pes. / base / opt. |
+|---|---|---|
+| tasa_descuento | 0,42 (±0,13) / 0,56 (±0,18) / 0,56 (±0,18) | 0,72 (±0,31) / 0,60 (±0,16) / 0,56 (±0,15) |
+| precio_nivel_mult | 0,37 (±0,15) / 0,33 (±0,13) / 0,26 (±0,10) | 0,52 (±0,25) / 0,22 (±0,07) / 0,25 (±0,07) |
+| precio_drift_anual | 0,21 (±0,07) / 0,18 (±0,06) / 0,14 (±0,05) | 0,31 (±0,16) / 0,17 (±0,05) / 0,15 (±0,05) |
+| hectareas | 0,15 / 0,08 / 0,18 | 0,10 / 0,06 / 0,08 |
+| capex_extra_pct | 0,05 / 0,03 / 0,01 | 0,04 / 0,02 / 0,02 |
+| p_bajo_si_alto, precision_factor_frio/calor | 0,00 | 0,00 |
+
+- **Ranking**: tasa > nivel del precio > drift del precio > hectáreas >
+  CAPEX > resto ≈ 0, igual en los tres escenarios y en las dos métricas.
+  La tasa sigue primera, pero con mucho menos peso que antes (0,42-0,56
+  contra 0,76-0,92): el precio, que antes entraba solo por escenario,
+  ahora suma ST ≈ 0,4-0,6 entre nivel y drift.
+- En el pesimista, tasa y nivel del precio tienen IC que se superponen
+  (sobre todo en P(VAN<0), donde muchos puntos dan probabilidad cerca de 1
+  y el índice se vuelve ruidoso): con n_base=128 no se puede afirmar cuál
+  de los dos pesa más en ese escenario.
+- La suma de los ST pasa de 1 (≈1,2-1,7): hay interacción, sobre todo
+  tasa × precio (el VAN es el ingreso descontado, producto de las dos).
+- Comparación con la especificación de retornos y drift en Sobol pero sin
+  nivel de precio (7 variables, `data/processed/sobol_indices*_spec_retornos.parquet`):
+  tasa 0,64-0,81 / drift 0,12-0,21 sobre el VAN medio. El drift pesa lo
+  mismo con las dos especificaciones; lo que baja la tasa es sumar el nivel
+  del precio.
+
+Surrogates (R² en test, LHS independiente; el dataset suma
+`precio_nivel_mult` como feature):
+
+| Target | RF antes | RF después | LightGBM antes | LightGBM después |
+|---|---|---|---|---|
+| `van_neto_medio_usd` | 0,9862 | 0,9743 | 0,9943 | 0,9898 |
+| `prob_van_negativo` | 0,9834 | 0,9681 | 0,9929 | 0,9843 |
+
+"Antes" es el dataset con precio sobre retornos y sin nivel de precio. La
+caída es esperable: una dimensión más con los mismos 2.400 puntos, y un
+target de riesgo que satura cerca de 1 en el pesimista. LightGBM sigue
+arriba de 0,98 en las dos. Las importancias de RF ordenan igual que Sobol
+(escenario, tasa, nivel del precio, hectáreas, drift).
+
+P(VAN<0) del escenario base a 120 ha y 14,23% real con la especificación
+principal: **62,4%** (10.000 simulaciones, `run_monte_carlo`; VAN medio
+−216.067, mediana −314.293).
 
 ## Problemas abiertos
 
