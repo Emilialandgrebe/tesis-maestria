@@ -18,6 +18,7 @@ if str(RAIZ) not in sys.path:
 
 from src.modelo_v2 import cargar_modelo_v2  # noqa: E402
 from src.precio_estocastico import (  # noqa: E402
+    PHI_NIVELES,
     ParametrosPrecioAR1,
     _simular_desvio_log,
     simulate_prices_ar1,
@@ -75,3 +76,21 @@ def test_mediana_queda_debajo_de_la_trayectoria():
     trayectoria = cargar_modelo_v2().trayectoria_precio("base", N_AÑOS)
     esperada = trayectoria * np.exp(-varianza_desvio_log(params, N_AÑOS) / 2)
     np.testing.assert_allclose(np.median(precios, axis=0)[6:], esperada[6:], rtol=0.01)
+
+
+PRECIO_NIVELES = ParametrosPrecioAR1(phi=PHI_NIVELES, especificacion="niveles")
+
+
+def test_niveles_precio_medio_igual_a_trayectoria():
+    precios = simulate_prices_ar1_antitetico(10_000, N_AÑOS, PRECIO_NIVELES, np.random.default_rng(42))
+    desvio = _desvio_relativo_de_la_media(precios, "base")
+    assert np.abs(desvio).max() < 0.01, np.round(desvio, 4)
+
+
+def test_niveles_varianza_cerrada_coincide_con_la_simulada():
+    z = np.random.default_rng(0).standard_normal((200_000, N_AÑOS))
+    np.testing.assert_allclose(
+        _simular_desvio_log(z, PRECIO_NIVELES).var(axis=0),
+        varianza_desvio_log(PRECIO_NIVELES, N_AÑOS),
+        rtol=0.02,
+    )

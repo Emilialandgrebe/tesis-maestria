@@ -32,8 +32,16 @@ así que hay interacción: la diferencia entre ambas columnas la mide.
 IC95% por bootstrap sobre los PARES antitéticos (fila i con fila i + n/2),
 para no romper la estructura del muestreo.
 
+Con `niveles` como tercer argumento, el precio usa la especificación
+alternativa (AR(1) en niveles del desvío log, que revierte a la trayectoria
+del Excel, con phi = PHI_NIVELES) -- análisis de sensibilidad de la
+especificación, no el default del motor. `niveles_plano` usa la misma
+dinámica en niveles pero con trayectoria REAL CONSTANTE: el promedio de la
+trayectoria del Excel en los años con precio (7-20), para medir cuánto del
+resultado depende de la suba real de la trayectoria.
+
 Uso:
-    python scripts/descomponer_varianza.py [escenario] [n_simulaciones]
+    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [retornos|niveles|niveles_plano]
 """
 
 from __future__ import annotations
@@ -56,35 +64,57 @@ from src.monte_carlo import (  # noqa: E402
     resumen_financiero,
     run_monte_carlo_antitetico,
 )
+from src.modelo_v2 import cargar_modelo_v2  # noqa: E402
+from src.precio_estocastico import PHI_NIVELES, ParametrosPrecioAR1  # noqa: E402
 
 FUENTES = (*FUENTES_ESTOCASTICAS, "opex")
 N_BOOTSTRAP = 1_000
 SALIDA = RAIZ / "outputs"
 
 
-def _van(params: ParametrosMC, apagadas: set[str]) -> np.ndarray:
+def _van(
+    params: ParametrosMC, apagadas: set[str], precio_params: ParametrosPrecioAR1
+) -> np.ndarray:
     corrida = replace(
         params,
         fuentes_fijas=frozenset(apagadas - {"opex"}),
         capex_opex_estocastico="opex" not in apagadas,
     )
     costos = ParametrosCostos(hectareas=corrida.hectareas)
-    resumen = resumen_financiero(run_monte_carlo_antitetico(corrida, costos), costos)
+    resumen = resumen_financiero(
+        run_monte_carlo_antitetico(corrida, costos, precio_params), costos
+    )
     return resumen["van_neto_usd"].to_numpy()
 
 
-def descomponer(escenario: str = "base", n_simulaciones: int = 10_000, semilla: int = 42):
+def descomponer(
+    escenario: str = "base",
+    n_simulaciones: int = 10_000,
+    semilla: int = 42,
+    especificacion: str = "retornos",
+):
     """Retorna (corridas, fracciones): una fila por corrida con media, desvío
     y P(VAN<0), y una fila por fuente con las dos fracciones de varianza."""
     params = ParametrosMC(n_simulaciones=n_simulaciones, escenario=escenario, semilla=semilla)
+    if especificacion in ("niveles", "niveles_plano"):
+        trayectoria = None
+        if especificacion == "niveles_plano":
+            excel = cargar_modelo_v2().trayectoria_precio(escenario, params.n_años)
+            trayectoria = tuple(np.where(excel > 0, excel[excel > 0].mean(), 0.0))
+        precio_params = ParametrosPrecioAR1(
+            escenario=escenario, phi=PHI_NIVELES, especificacion="niveles",
+            trayectoria=trayectoria,
+        )
+    else:
+        precio_params = ParametrosPrecioAR1(escenario=escenario)
     todas = set(FUENTES)
 
-    vans: dict[str, np.ndarray] = {"todo activo": _van(params, set())}
+    vans: dict[str, np.ndarray] = {"todo activo": _van(params, set(), precio_params)}
     for f in FUENTES:
-        vans[f"sin {f}"] = _van(params, {f})
+        vans[f"sin {f}"] = _van(params, {f}, precio_params)
     for f in FUENTES:
-        vans[f"solo {f}"] = _van(params, todas - {f})
-    vans["todo fijo"] = _van(params, todas)
+        vans[f"solo {f}"] = _van(params, todas - {f}, precio_params)
+    vans["todo fijo"] = _van(params, todas, precio_params)
 
     corridas = pd.DataFrame([
         {
@@ -128,12 +158,14 @@ def descomponer(escenario: str = "base", n_simulaciones: int = 10_000, semilla: 
 if __name__ == "__main__":
     escenario = sys.argv[1] if len(sys.argv) > 1 else "base"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 10_000
+    especificacion = sys.argv[3] if len(sys.argv) > 3 else "retornos"
 
-    corridas, fracciones = descomponer(escenario, n)
+    corridas, fracciones = descomponer(escenario, n, especificacion=especificacion)
 
+    sufijo = escenario if especificacion == "retornos" else f"{escenario}_precio_{especificacion}"
     SALIDA.mkdir(exist_ok=True)
-    corridas.to_csv(SALIDA / f"descomposicion_varianza_{escenario}_corridas.csv", index=False)
-    fracciones.to_csv(SALIDA / f"descomposicion_varianza_{escenario}_fracciones.csv", index=False)
+    corridas.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_corridas.csv", index=False)
+    fracciones.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_fracciones.csv", index=False)
 
     pd.set_option("display.width", 160)
     print(corridas.to_string(index=False))

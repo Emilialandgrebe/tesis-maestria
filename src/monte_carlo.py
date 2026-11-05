@@ -544,12 +544,18 @@ def _combinar_factores(
     )
 
 
-def _fijar_precio(params: ParametrosMC, prices: np.ndarray) -> np.ndarray:
+def _fijar_precio(
+    params: ParametrosMC, prices: np.ndarray, precio_params: ParametrosPrecioAR1 | None
+) -> np.ndarray:
     """Si "precio" está en `params.fuentes_fijas`, reemplaza los precios
-    simulados por la trayectoria del Excel del escenario."""
+    simulados por la trayectoria base: la de `precio_params` si la trae, si
+    no la del Excel del escenario."""
     if "precio" not in params.fuentes_fijas:
         return prices
-    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    if precio_params is not None and params.modo_precio == "ar1":
+        trayectoria = precio_params.trayectoria_base(params.n_años)
+    else:
+        trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     return np.broadcast_to(trayectoria, prices.shape).copy()
 
 
@@ -1164,7 +1170,7 @@ def run_monte_carlo(
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields(params, rng)
-    prices = _fijar_precio(params, _despachar_precios(params, rng, precio_params))
+    prices = _fijar_precio(params, _despachar_precios(params, rng, precio_params), precio_params)
     capex_extra = simulate_capex_extra(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1201,7 +1207,9 @@ def run_monte_carlo_antitetico(
     rng = np.random.default_rng(params.semilla)
 
     yields = simulate_yields_antitetico(params, rng)
-    prices = _fijar_precio(params, _despachar_precios_antitetico(params, rng, precio_params))
+    prices = _fijar_precio(
+        params, _despachar_precios_antitetico(params, rng, precio_params), precio_params
+    )
     capex_extra = simulate_capex_extra_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )

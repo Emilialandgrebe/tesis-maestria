@@ -56,6 +56,36 @@ class ParametrosPrecioAR1:
     # sigma_eps=0.137358 (con c=0.031127 en la serie completa).
     phi: float = -0.217495
     sigma_eps: float = 0.140922
+    # "retornos" (default): AR(1) sobre retornos log, ARIMA(1,1,0) -- el
+    # desvío respecto de la trayectoria no revierte. "niveles": AR(1) sobre
+    # el DESVÍO log respecto de la trayectoria, x_t = phi * x_(t-1) +
+    # sigma_eps * Z_t con x_0 = 0, que revierte a la trayectoria del Excel.
+    # Solo para análisis de sensibilidad de la especificación (ver
+    # PHI_NIVELES y notas/PLAN_TESIS.md); con "niveles", `phi` tiene que ser
+    # el de niveles y `c` tiene que valer 0.
+    especificacion: Literal["retornos", "niveles"] = "retornos"
+    # Trayectoria base propia (USD/kg por año 1..n), en lugar de la del Excel
+    # del `escenario`. None (default) usa la del Excel. Solo para análisis
+    # de sensibilidad (p. ej. precio real constante).
+    trayectoria: tuple[float, ...] | None = None
+
+    def trayectoria_base(self, n_años: int) -> np.ndarray:
+        if self.trayectoria is None:
+            return cargar_modelo_v2().trayectoria_precio(self.escenario, n_años)
+        if len(self.trayectoria) != n_años:
+            raise ValueError(
+                f"trayectoria tiene {len(self.trayectoria)} años, se esperaban {n_años}"
+            )
+        return np.asarray(self.trayectoria, dtype=float)
+
+
+# AR(1) por OLS sobre log(precio real) anual 1991-2026 con constante y
+# tendencia lineal (la trayectoria del Excel tiene tendencia, así que la
+# reversión es a una senda con pendiente): phi=0,8391 (EE 0,106), semivida
+# ~4 años. Sin tendencia da 0,8761. El ADF sobre el log del nivel no rechaza
+# raíz unitaria (p=0,55 con constante, 0,82 con tendencia): la serie no
+# permite distinguir esta especificación de la de retornos.
+PHI_NIVELES = 0.8391
 
 
 def varianza_desvio_log(params: ParametrosPrecioAR1, n_años: int) -> np.ndarray:
@@ -70,8 +100,12 @@ def varianza_desvio_log(params: ParametrosPrecioAR1, n_años: int) -> np.ndarray
 
     El drift c no aporta varianza. Verificado contra la varianza muestral
     de 400.000 trayectorias (coinciden al tercer decimal en los 20 años).
+
+    Con `especificacion="niveles"`: Var[x_t] = sigma^2 (1 - phi^(2t)) / (1 - phi^2).
     """
     j = np.arange(1, n_años + 1)
+    if params.especificacion == "niveles":
+        return params.sigma_eps**2 * (1 - params.phi ** (2 * j)) / (1 - params.phi**2)
     return params.sigma_eps**2 / (1 - params.phi) ** 2 * np.cumsum((1 - params.phi**j) ** 2)
 
 
@@ -86,6 +120,18 @@ def _simular_desvio_log(z: np.ndarray, params: ParametrosPrecioAR1) -> np.ndarra
         d_t = cumsum(r_1..r_t) - Var[d_t] / 2
     """
     n_simulaciones, n_años = z.shape
+    if params.especificacion == "niveles":
+        if params.c != 0:
+            raise ValueError("especificacion='niveles' no admite drift c != 0")
+        x = np.empty((n_simulaciones, n_años))
+        x[:, 0] = params.sigma_eps * z[:, 0]
+        for t in range(1, n_años):
+            x[:, t] = params.phi * x[:, t - 1] + params.sigma_eps * z[:, t]
+        return x - varianza_desvio_log(params, n_años).reshape(1, -1) / 2
+    if params.especificacion != "retornos":
+        raise ValueError(
+            f"especificacion debe ser 'retornos' o 'niveles', recibido {params.especificacion!r}"
+        )
     retornos = np.empty((n_simulaciones, n_años))
     retornos[:, 0] = params.c / (1 - params.phi) + params.sigma_eps * z[:, 0]
     for t in range(1, n_años):
@@ -100,7 +146,7 @@ def _simular_precios_desde_normales(
 ) -> np.ndarray:
     """Trayectoria base del escenario (1, n_años) * exp(desvío) (n, n_años)."""
     n_años = z.shape[1]
-    trayectoria = cargar_modelo_v2().trayectoria_precio(params.escenario, n_años)
+    trayectoria = params.trayectoria_base(n_años)
     return trayectoria.reshape(1, -1) * np.exp(_simular_desvio_log(z, params))
 
 

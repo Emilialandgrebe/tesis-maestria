@@ -878,6 +878,89 @@ Lectura:
   `run_monte_carlo_antitetico`; la diferencia está dentro del IC95% del
   muestreo directo (±39.154).
 
+#### Sensibilidad a la especificación del precio (pendiente de decidir cuál queda como principal)
+
+Análisis de sensibilidad, SIN cambiar el default del motor (sigue siendo
+el AR(1) sobre retornos). Variantes, todas con sigma_eps = 0,1409 y media
+igual a la trayectoria base (corrección de convexidad con la varianza
+cerrada de cada una):
+
+- **Retornos** (default): ARIMA(1,1,0), phi = −0,217. El desvío respecto de
+  la trayectoria no revierte: la varianza crece con el horizonte.
+- **Niveles**: AR(1) del desvío log respecto de la trayectoria del Excel,
+  x_t = phi·x_(t−1) + sigma·Z_t, x_0 = 0, phi = 0,839 (`PHI_NIVELES`, OLS
+  sobre log del precio real 1991-2026 con constante y tendencia, EE 0,106,
+  semivida ~4 años; sin tendencia da 0,876). El ADF no rechaza raíz
+  unitaria en el log del nivel (p = 0,55 / 0,82): con 36 años la serie no
+  permite elegir entre las dos especificaciones.
+- **Niveles con precio plano**: misma dinámica, trayectoria real constante
+  igual al promedio de la del Excel en los años 7-20 (10,04 USD/kg).
+- Control adicional: niveles con precio plano en 8 USD/kg (el precio del
+  año 7 sin la suba real posterior).
+
+`ParametrosPrecioAR1.especificacion` y `.trayectoria` (solo para estos
+análisis); `scripts/descomponer_varianza.py base 10000 {retornos,niveles,niveles_plano}`.
+
+**Plausibilidad del precio simulado** (base, 10.000 antitéticas, USD/kg):
+
+| Especificación | Año 7 P5 / P50 / P95 | Año 12 P5 / P50 / P95 | Año 20 P5 / P50 / P95 | P95/P5 año 20 |
+|---|---|---|---|---|
+| Retornos | 4,52 / 7,61 / 12,81 | 4,65 / 9,20 / 18,20 | 4,22 / 10,03 / 23,86 | 5,66 |
+| Niveles | 5,13 / 7,76 / 11,74 | 6,32 / 9,67 / 14,82 | 7,20 / 11,12 / 17,17 | 2,38 |
+| Niveles, plano 10,04 | 6,43 / 9,73 / 14,73 | 6,34 / 9,71 / 14,87 | 6,29 / 9,70 / 14,98 | 2,38 |
+
+Serie FRED WPU01190106 deflactada por CPI-U, anual 1991-2026 (índice, no
+USD/kg, así que se compara en términos relativos): máximo/mínimo de toda
+la serie 2,95 (mínimo 1996, máximo 2014); P5-P95 del nivel respecto de su
+media 0,66-1,61 (cociente 2,44); desvío del log del nivel 0,28 (0,23 sin
+tendencia); máximo/mínimo en ventanas de 14 años: mediana 1,96 (1,50-2,66).
+
+- Con **retornos**, la dispersión entre escenarios en el año 20 (P95/P5 =
+  5,7, desvío log 0,52) duplica la que la serie mostró en 36 años (2,95
+  entre su mínimo y su máximo; desvío log 0,28). El P95 del año 20 (23,9
+  USD/kg) es el doble de la trayectoria.
+- Con **niveles**, la dispersión estacionaria (desvío log 0,26, P95/P5 ≈
+  2,4) coincide con la histórica (0,23-0,28 y 2,44).
+- Dentro de cada trayectoria simulada (máximo/mínimo en los años 7-20),
+  las dos especificaciones dan algo parecido a la historia (mediana 1,81
+  retornos, 1,89 niveles, contra 1,96 histórico): la diferencia no está en
+  cuánto oscila el precio, sino en que con retornos el nivel se aleja de la
+  trayectoria y no vuelve.
+- Salvedad: la comparación asume que la dispersión histórica en el tiempo
+  representa la dispersión entre escenarios futuros, y la serie tiene solo
+  36 años de un mercado angosto (con años sin dato rellenados hacia
+  adelante).
+- **La trayectoria del Excel sube 44% real** (8 → 11,5 USD/kg entre los
+  años 7 y 20, ~2,8% anual), contra un drift real estimado de −0,15%
+  anual en la serie.
+
+**VAN y descomposición por especificación** (base, 120 ha, 14,23% real):
+
+| Especificación | VAN medio | Desvío del VAN | P(VAN<0) | Fracción del precio al quitar (IC95%) | Fracción del precio sola |
+|---|---:|---:|---:|---|---|
+| Retornos (default) | −215.542 | 2.037.177 | 61,8% | 94,8% (94,5–95,1) | 93,6% |
+| Niveles | −221.514 | 1.064.662 | 62,2% | 81,0% (80,0–82,0) | 79,9% |
+| Niveles, plano 10,04 | −108.281 | 1.089.183 | 57,9% | 81,0% (80,0–82,0) | 79,7% |
+| Control: niveles, plano 8,00 | −1.123.492 | 878.834 | 89,5% | — | — |
+
+Con niveles, las fuentes de rendimiento ganan peso relativo (plantas 9,1%,
+clima 4,7%, vecería 3,1%, OPEX 3,1% al quitar) porque la varianza total se
+reduce a la mitad, no porque crezcan en términos absolutos.
+
+Lectura:
+
+- La especificación cambia la **dispersión** (el desvío del VAN se reduce
+  a la mitad con niveles) pero casi no cambia el **VAN medio ni
+  P(VAN<0)** (61,8% contra 62,2%). Con media del VAN cerca de cero y
+  distribución aproximadamente simétrica alrededor de ella, P(VAN<0) la
+  fija la media, no el ancho.
+- Lo que mueve P(VAN<0) es el **nivel de la trayectoria**. Con el mismo
+  precio promedio pero sin pendiente (10,04 plano) el VAN mejora +113.000:
+  adelanta precio a los años de menos descuento. Sin la suba real (plano
+  en 8 USD/kg), el VAN medio cae a −1,12 M y P(VAN<0) sube a 89,5%. El
+  resultado del proyecto depende mucho más del supuesto de suba real del
+  precio que de cómo se modele el ruido alrededor de ella.
+
 ## Problemas abiertos
 
 ### ⚠️ EL CAPEX ESTÁ INCOMPLETO — faltan Red antigranizo y Paneles solares — el VAN/P(VAN<0) actuales NO son el número final
