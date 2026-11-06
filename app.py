@@ -10,6 +10,10 @@ Secciones:
   `data/processed/sobol_indices.parquet` -- NO se recalcula en vivo).
 - Comparación de los tres escenarios de precio a los parámetros del sidebar.
 
+El sidebar incluye el traslado de quebrantos impositivos (apagado por
+defecto, como en el Excel); aplica a todas las pestañas salvo Sobol, que
+está pre-calculado sin quebrantos.
+
 Ejecutar:  streamlit run app.py
 """
 
@@ -75,6 +79,7 @@ def simular(
     modo_precio: str,
     n_simulaciones: int,
     semilla: int,
+    quebrantos: bool = False,
 ) -> dict:
     """Corre `run_monte_carlo()` una vez y devuelve lo que necesita la UI.
 
@@ -103,7 +108,7 @@ def simular(
         modo_precio="ar1" if modo_precio == "ar1_retornos" else modo_precio,
         semilla=semilla,
     )
-    costos = ParametrosCostos(hectareas=hectareas)
+    costos = ParametrosCostos(hectareas=hectareas, quebrantos=quebrantos)
     precio_params = precio_retornos_estres(escenario) if modo_precio == "ar1_retornos" else None
     df = run_monte_carlo(params, costos, precio_params)
     # `resumen_financiero` necesita el MISMO objeto `costos` usado en la corrida
@@ -215,6 +220,16 @@ with st.sidebar:
         help="Cópula gaussiana frío↔calor (r≈-0,29, no significativa al 5%). Default: desactivado.",
     )
 
+    quebrantos = st.checkbox(
+        "Traslado de quebrantos (5 años)", value=False,
+        help=(
+            "Las pérdidas fiscales (EBIT < 0) se descuentan de la base de "
+            "Ganancias de los 5 años siguientes, las más antiguas primero "
+            "(hoja Quebrantos del Excel). Se calcula por simulación. "
+            "Default: desactivado, criterio prudente hasta validar con el contador."
+        ),
+    )
+
     st.divider()
 
     n_simulaciones = st.slider(
@@ -230,6 +245,7 @@ _args_comunes = dict(
     modo_precio=modo_precio,
     n_simulaciones=int(n_simulaciones),
     semilla=SEMILLA,
+    quebrantos=bool(quebrantos),
 )
 
 with st.spinner("Corriendo Monte Carlo…"):
@@ -380,6 +396,12 @@ with tab_sobol:
                 "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
                 "vivo, así que no reflejan el modelo seleccionado."
             )
+        if quebrantos:
+            st.info(
+                "El traslado de quebrantos está activado en el sidebar, pero "
+                "estos índices se pre-calcularon sin quebrantos (default "
+                "prudente, ver notas/PLAN_TESIS.md)."
+            )
         etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
         fig, ax = plt.subplots(figsize=(8, 3.8))
         ax.barh(
@@ -420,6 +442,7 @@ with tab_cmp:
         f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
         f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
         f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
+        f"{'con' if quebrantos else 'sin'} traslado de quebrantos, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):
