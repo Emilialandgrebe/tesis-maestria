@@ -1037,7 +1037,71 @@ P(VAN<0) del escenario base a 120 ha y 14,23% real con la especificación
 principal: **62,4%** (10.000 simulaciones, `run_monte_carlo`; VAN medio
 −216.067, mediana −314.293).
 
+### Traslado de quebrantos impositivos: implementado, apagado por defecto (rama `quebrantos`, 2026-11-05)
+
+El Excel v2 agregó el traslado de quebrantos (Supuestos bloque 7: B64
+interruptor 0/1, B65 plazo de 5 años; hoja Quebrantos con lógica FIFO y
+vencimiento; Flujo!32 se resta del EBIT antes de Ganancias). El motor lo
+replica con `ParametrosCostos(quebrantos=False, quebrantos_anios=5)` y
+`quebrantos_utilizados()` en `src/costos.py`. En Monte Carlo se calcula por
+simulación: cada trayectoria tiene su propia secuencia de pérdidas y
+ganancias y, por lo tanto, su propio saldo de quebrantos. La app tiene una
+casilla "Traslado de quebrantos (5 años)" en el sidebar, apagada por defecto.
+
+Determinístico (escenario base, 120 ha), igual al Excel en las dos
+posiciones del interruptor:
+
+| | VAN | TIR real | Quebrantos usados |
+|---|---|---|---|
+| Sin quebrantos | −240.830,30 | 13,5699% | — |
+| Con quebrantos | −67.346,0 | 14,0464% | 472k (año 8), 1.524k (año 9), 268k (año 10) |
+
+Con el interruptor encendido, las pérdidas de los años 1-2 y ~21k de la del
+año 3 vencen sin usarse.
+
+Monte Carlo, escenario base, 120 ha, 14,23% real, AR(1) en niveles,
+10.000 simulaciones (`run_monte_carlo`, semilla 42, mismas trayectorias en
+las dos corridas):
+
+| | VAN medio (EE) | Mediana | P(VAN<0) (EE) | TIR mediana |
+|---|---|---|---|---|
+| Sin quebrantos | −216.067 (10.561) | −314.293 | 62,4% (0,5) | 13,36% |
+| Con quebrantos | −44.421 (10.697) | −141.529 | 55,7% (0,5) | 13,84% |
+
+Todas las simulaciones usan quebrantos (media 2,25 M USD por simulación).
+
+**Decisión:** Sobol (`src/sensibilidad.py`), el dataset de ML
+(`src/dataset_ml.py`) y la descomposición de varianza siguen **sin
+quebrantos**: es el default prudente del Excel (B64 = 0) hasta validarlo con
+el contador. Si se activa, hay que regenerar Sobol, dataset y surrogates. La
+pestaña Sobol de la app avisa cuando la casilla está activada.
+
 ## Problemas abiertos
+
+### Valores de referencia "con quebrantos" fijados en el test
+
+El Excel se guarda con el interruptor en 0, así que su caché solo tiene los
+valores sin quebrantos (esos los exporta el importador y el test verifica
+que los CSV sigan sincronizados con el .xlsx). Los valores **con**
+quebrantos están escritos a mano en `REFERENCIA_CON_QUEBRANTOS`
+(`tests/test_consistencia_excel.py`): VAN −67.346,0, TIR 14,0464% y
+quebrantos de los años 8-10. Se verificaron recalculando el Excel con
+B64 = 1 (librería `formulas`, coinciden al centavo), pero **no se actualizan
+solos**: si cambia cualquier supuesto del Excel que mueva el EBIT, hay que
+volver a tomarlos (abrir el Excel, poner B64 = 1, leer Flujo!B5, Flujo!B6 y
+Flujo!32, y volver a dejar B64 = 0 antes de guardar).
+
+### Consulta al contador: ¿activar el OPEX pre-productivo como costo de implantación?
+
+Hoy el OPEX de los años pre-productivos (1-7) se deduce como gasto del año,
+lo que genera pérdidas fiscales grandes al principio. Con el traslado de
+quebrantos a 5 años, parte de esas pérdidas vence antes de que haya
+ganancias (años 1-2 y parte del 3). Preguntar al contador si esos costos
+pueden (o deben) activarse como costo de implantación del monte frutal y
+amortizarse desde la entrada en producción. Eso movería la deducción hacia
+los años con ganancia y evitaría el vencimiento, y cambiaría tanto el
+Excel (amortizaciones e Impuesto a las Ganancias) como el motor. Definirlo
+junto con la validación del traslado de quebrantos.
 
 ### Amplitud de la vecería y P90 de producción por encima de 3.000 kg/ha — pendiente de calibrar con los asesores
 

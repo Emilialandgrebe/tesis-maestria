@@ -1113,6 +1113,7 @@ def _orquestar_resultado(
         "ingreso_usd":      revenue.ravel(),
         "opex_usd":         opex.ravel(),
         "ebitda_usd":       flujo["ebitda"].ravel(),
+        "quebrantos_utilizados_usd": flujo["quebrantos_utilizados"].ravel(),
         "impuesto_ganancias_usd": flujo["impuesto_ganancias"].ravel(),
         "flujo_neto_usd":   flujo_neto.ravel(),
         "vp_neto_usd":      vp_neto.ravel(),
@@ -1158,7 +1159,8 @@ def run_monte_carlo(
     -------
     pd.DataFrame con columnas:
         simulacion, año, rendimiento_kg_ha, precio_usd_kg,
-        ingreso_usd, opex_usd, ebitda_usd, impuesto_ganancias_usd,
+        ingreso_usd, opex_usd, ebitda_usd, quebrantos_utilizados_usd,
+        impuesto_ganancias_usd,
         flujo_neto_usd, vp_neto_usd, van_neto_usd,
         capex_extra_estocastico_usd
     """

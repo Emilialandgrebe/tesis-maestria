@@ -62,6 +62,13 @@ class ParametrosCostos:
     representando ítems "A confirmar" que terminen saliendo más caros. No
     afecta el valor residual: la tierra se recupera a su valor de compra.
 
+    `quebrantos` activa el traslado de quebrantos impositivos (Supuestos
+    bloque 7 / hoja Quebrantos del Excel): la pérdida fiscal (EBIT < 0) de
+    un año se descuenta de la base de Ganancias de los `quebrantos_anios`
+    años siguientes, usando primero las más antiguas (FIFO). Default
+    apagado, igual que el Excel (criterio prudente hasta validar con el
+    contador). Ver `quebrantos_utilizados()`.
+
     Sincronizar `hectareas` con `ParametrosMC.hectareas` es responsabilidad
     de quien arma la simulación (`run_monte_carlo()` lo hace automático).
     """
@@ -70,6 +77,8 @@ class ParametrosCostos:
     capex_factor: float = 1.0
     opex_variacion_pct: float = OPEX_VARIACION_PCT
     alicuota_ganancias: float = _MODELO.supuestos["alicuota_ganancias"]
+    quebrantos: bool = False
+    quebrantos_anios: int = int(_MODELO.supuestos["quebrantos_anios"])
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
     def __post_init__(self) -> None:
@@ -89,6 +98,10 @@ class ParametrosCostos:
             raise ValueError(f"capex_factor debe ser > 0; recibido {self.capex_factor!r}")
         if self.hectareas <= 0:
             raise ValueError(f"hectareas debe ser > 0; recibido {self.hectareas!r}")
+        if int(self.quebrantos_anios) != self.quebrantos_anios or self.quebrantos_anios < 1:
+            raise ValueError(
+                f"quebrantos_anios debe ser un entero >= 1; recibido {self.quebrantos_anios!r}"
+            )
 
     # ------------------------------------------------------------------
     # Escala con hectáreas
@@ -251,6 +264,49 @@ def opex_total(
     return operativo * multiplicador + params.alicuota_iibb * ingresos_usd
 
 
+def quebrantos_utilizados(ebit: np.ndarray, anios: int) -> np.ndarray:
+    """
+    Quebrantos impositivos usados en cada año, por simulación (hoja
+    Quebrantos del Excel, fila 55).
+
+    Cada año con EBIT < 0 genera un quebranto igual a la pérdida. Un
+    quebranto originado en el año y puede usarse en los años t con
+    y < t <= y + `anios` (vence después); en cada año se consume hasta el
+    EBIT positivo, empezando por los de origen más antiguo (FIFO). El
+    quebranto mantiene su valor nominal en USD constantes (Supuestos!D65:
+    se asume actualizado).
+
+    Se calcula por fila: en Monte Carlo cada trayectoria tiene su propia
+    secuencia de pérdidas y ganancias, así que el saldo de quebrantos es
+    distinto en cada simulación.
+
+    Parámetros
+    ----------
+    ebit : np.ndarray
+        Forma (n_simulaciones, T), años 1..T. El año 0 del Excel tiene
+        EBIT = 0 (solo CAPEX), así que no genera quebranto.
+    anios : int
+        Plazo de traslado (Supuestos!B65).
+
+    Retorna
+    -------
+    np.ndarray de la misma forma que `ebit`, >= 0, con el quebranto usado
+    en cada año (nunca mayor que el EBIT positivo del año).
+    """
+    ebit = np.asarray(ebit, dtype=float)
+    n, T = ebit.shape
+    saldo = np.maximum(0.0, -ebit)  # saldo por año de origen, se va consumiendo
+    usado = np.zeros_like(ebit)
+    for t in range(T):
+        restante = np.maximum(0.0, ebit[:, t])
+        for y in range(max(0, t - anios), t):  # de más antiguo a más nuevo
+            uso = np.minimum(saldo[:, y], restante)
+            saldo[:, y] -= uso
+            restante -= uso
+            usado[:, t] += uso
+    return usado
+
+
 def flujo_caja_neto(
     ingresos_usd: np.ndarray,
     opex_usd: np.ndarray,
@@ -258,24 +314,33 @@ def flujo_caja_neto(
 ) -> dict[str, np.ndarray]:
     """
     Flujo libre del proyecto por simulación y año 1..T, sin el CAPEX del
-    año 0 (hoja Flujo, filas 18-27):
+    año 0 (hoja Flujo, filas 18-27 y 32):
 
-        EBITDA     = ingresos - OPEX
-        EBIT       = EBITDA - amortizaciones
-        Ganancias  = max(0, EBIT * alícuota)   (sin traslado de quebrantos,
-                                                igual que el Excel, ver Flujo!E7)
-        flujo      = EBITDA - Ganancias (+ valor residual en el año T)
+        EBITDA      = ingresos - OPEX
+        EBIT        = EBITDA - amortizaciones
+        quebrantos  = quebrantos_utilizados(EBIT)  si params.quebrantos, si no 0
+        Ganancias   = max(0, (EBIT - quebrantos) * alícuota)   (Flujo!21)
+        flujo       = EBITDA - Ganancias (+ valor residual en el año T)
 
     Retorna
     -------
-    dict con "ebitda", "impuesto_ganancias" y "flujo_neto", cada uno de la
-    misma forma que `ingresos_usd`.
+    dict con "ebitda", "quebrantos_utilizados", "impuesto_ganancias" y
+    "flujo_neto", cada uno de la misma forma que `ingresos_usd`.
     """
     T = ingresos_usd.shape[1]
     ebitda = ingresos_usd - opex_usd
     ebit = ebitda - params.amortizaciones(T).reshape(1, T)
-    impuesto = np.maximum(0.0, ebit * params.alicuota_ganancias)
+    if params.quebrantos:
+        usados = quebrantos_utilizados(ebit, int(params.quebrantos_anios))
+    else:
+        usados = np.zeros_like(ebit)
+    impuesto = np.maximum(0.0, (ebit - usados) * params.alicuota_ganancias)
 
     flujo = ebitda - impuesto
     flujo[:, -1] += params.valor_residual
-    return {"ebitda": ebitda, "impuesto_ganancias": impuesto, "flujo_neto": flujo}
+    return {
+        "ebitda": ebitda,
+        "quebrantos_utilizados": usados,
+        "impuesto_ganancias": impuesto,
+        "flujo_neto": flujo,
+    }
