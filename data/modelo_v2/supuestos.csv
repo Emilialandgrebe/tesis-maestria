@@ -19,6 +19,8 @@ alicuota_ganancias,0.25,fracción,Supuestos!B46
 alicuota_iibb,0.02,fracción de ventas,Supuestos!B47
 inflacion_eeuu,0.025,fracción/año,Supuestos!B48
 tasa_descuento_real,0.142305365853659,fracción/año,Supuestos!B49
+quebrantos_aplicar,0.0,0/1,Supuestos!B64
+quebrantos_anios,5.0,años,Supuestos!B65
 tasa_rf,0.0395,fracción/año,Tasa!B6
 prima_mercado,0.0423,fracción/año,Tasa!B7
 beta_desapalancada,0.81,-,Tasa!B8

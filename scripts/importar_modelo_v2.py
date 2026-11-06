@@ -13,6 +13,7 @@ Archivos que genera:
 - anual.csv       series por año 0-20: curva de rendimiento, precios por
                   escenario y rampa de fertilización (Supuestos, filas 54-58)
 - referencia_flujo.csv        flujo de fondos año a año de la hoja Flujo
+                              (incluye la fila 32, quebrantos utilizados)
 - referencia_indicadores.csv  VAN, TIR, tasa y CAPEX total del Excel
 
 Los dos `referencia_*` no los usa el motor: son el blanco contra el que
@@ -63,6 +64,8 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "alicuota_iibb": ("Supuestos!B47", "fracción de ventas", "Alícuota de Ingresos Brutos"),
     "inflacion_eeuu": ("Supuestos!B48", "fracción/año", "Inflación esperada EE.UU."),
     "tasa_descuento_real": ("Supuestos!B49", "fracción/año", "Tasa de descuento real"),
+    "quebrantos_aplicar": ("Supuestos!B64", "0/1", "Aplicar traslado de quebrantos"),
+    "quebrantos_anios": ("Supuestos!B65", "años", "Años de traslado de quebrantos"),
     "tasa_rf": ("Tasa!B6", "fracción/año", "Tasa libre de riesgo"),
     "prima_mercado": ("Tasa!B7", "fracción/año", "Prima de riesgo de mercado"),
     "beta_desapalancada": ("Tasa!B8", "-", "Beta desapalancada"),
@@ -237,11 +240,30 @@ _FILAS_FLUJO = {
     "valor_residual_usd": 26,
     "flujo_evaluacion_usd": 27,
     "flujo_descontado_usd": 30,
+    # Fila agregada al final de la hoja (después del flujo descontado
+    # acumulado): Flujo!21 resta estos quebrantos del EBIT antes de Ganancias.
+    "quebrantos_utilizados_usd": 32,
+}
+
+# Etiqueta esperada en la columna A de las filas de Flujo que se leen por
+# número: si alguien inserta una fila en el medio, falla en vez de exportar
+# la fila equivocada.
+_ETIQUETAS_FLUJO = {
+    21: "(−) Impuesto a las Ganancias",
+    30: "Flujo descontado",
+    32: "Quebrantos utilizados",
 }
 
 
 def _exportar_referencia(valores) -> tuple[pd.DataFrame, pd.DataFrame]:
     hv = valores["Flujo"]
+    for fila, etiqueta in _ETIQUETAS_FLUJO.items():
+        texto_a = str(hv[f"A{fila}"].value or "")
+        if not texto_a.startswith(etiqueta):
+            raise ValueError(
+                f"Flujo!A{fila}: se esperaba {etiqueta!r}, se encontró {texto_a!r}. "
+                "¿Cambió el layout del Excel?"
+            )
     flujo = pd.DataFrame({"anio": list(range(len(COLUMNAS_AÑOS)))})
     for nombre, fila in _FILAS_FLUJO.items():
         flujo[nombre] = [float(hv[f"{c}{fila}"].value or 0) for c in COLUMNAS_AÑOS]
