@@ -1,0 +1,18 @@
+# Dependencias completas de la tesis (notebooks en Colab, scripts y tests).
+# La app Streamlit usa requirements.txt, con versiones fijas.
+requests
+pandas
+numpy
+scipy
+statsmodels
+pymannkendall
+matplotlib
+seaborn
+pyarrow
+fastparquet
+SALib==1.4.8
+scikit-learn
+lightgbm
+streamlit
+openpyxl
+pytest

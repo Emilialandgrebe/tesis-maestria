@@ -72,7 +72,9 @@ tesis-maestria/
 ├── scripts/                      # importar_modelo_v2.py
 ├── tests/                        # consistencia con el Excel, TIR (pytest)
 ├── notas/                        # bitácora de trabajo, no forma parte de la tesis en sí
-└── requirements.txt
+├── app.py                        # app Streamlit (Streamlit Community Cloud)
+├── requirements.txt              # dependencias de la app, versiones fijas (Python 3.12)
+└── requirements-tesis.txt        # dependencias completas: notebooks (Colab), scripts y tests
 ```
 
 ## Stack tecnológico
