@@ -1076,7 +1076,119 @@ quebrantos**: es el default prudente del Excel (B64 = 0) hasta validarlo con
 el contador. Si se activa, hay que regenerar Sobol, dataset y surrogates. La
 pestaña Sobol de la app avisa cuando la casilla está activada.
 
+### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05)
+
+Los 3.000 kg/ha del Excel (Supuestos!B20) son, en el motor, el rendimiento
+**esperado** de plena producción en el clima de Jocolí, no un techo. El
+motor lo logra con una constante de escala mayor, que se reduce al
+multiplicarla por factores que solo penalizan.
+
+**(a) Funciones de frío y calor.** `_media_factor_frio()` y
+`_media_factor_calor()` (`src/monte_carlo.py`, líneas 113 y 152) valen 1,00
+cuando la variable climática está en su media histórica o por encima, y
+penalizan linealmente por debajo:
+
+| Factor | Variable | Centro (factor 1) | Zona moderada (0,70-1,00) | Severa (0,40-0,70) |
+|---|---|---|---|---|
+| Frío | horas < 7 °C, mayo-sep | ≥ 984,3 h | 784,3-984,3 h | < 784,3 h |
+| Calor | tmax diaria media, ene-feb | ≥ 29,87 °C | 22,57-29,87 °C | < 22,57 °C |
+
+Nunca superan 1: un año mejor que la media no suma, solo no resta. El
+centro es la media del sitio, no el óptimo agronómico (1.000 h; 35-38 °C),
+para no penalizar dos veces el clima típico de Jocolí, que ya está implícito
+en los 3.000 kg/ha.
+
+La calibración está escrita a mano en `src/monte_carlo.py` (líneas 42-45:
+984,3 / 212,7 h y 29,87 / 1,98 °C) y coincide con
+`data/processed/features_climaticas.parquet` (35 años, 1990-2024: medias
+984,26 h y 29,87 °C, desvíos muestrales 212,65 h y 1,98 °C). Ese parquet sale
+de `data/raw/clima_jocoli.parquet`, descargado por
+`src/data/climate_fetcher.py` de la API histórica de Open-Meteo
+(`archive-api.open-meteo.com`) para −32,5833 / −68,6833.
+
+Tres precisiones para el texto:
+
+- **"Años normales o buenos"** quiere decir aquí "en la media histórica o por
+  encima". Con las variables normales del motor, la mitad de los años se
+  penaliza por construcción. En la serie real son el 46% de los años en frío
+  y el 54% en calor.
+- **"Valor 1" es la media del factor, no cada valor sorteado.** El factor
+  sorteado es una Beta con esa media (precisión κ = 15). En un año sin
+  penalidad la media se recorta a 0,9999 para que la Beta exista, así que el
+  factor sorteado es ≈ 1 pero siempre ≤ 1.
+- **El código no fija ERA5-Land.** La consulta no pasa el parámetro
+  `models`, así que usa la combinación por defecto de la API histórica de
+  Open-Meteo. Los comentarios del código dicen "ERA5-Land / Open-Meteo",
+  pero eso no está garantizado por la consulta (ver Problemas abiertos).
+
+**(b) Medias de los factores.** `_esperanza_factor_frio()` y
+`_esperanza_factor_calor()` integran numéricamente cada función contra una
+Normal(media, desvío) con la calibración de arriba:
+
+| Factor | Media en el motor (Normal) | Media empírica sobre los 35 años |
+|---|---|---|
+| Frío | **0,894877** (0,895) | 0,9035 |
+| Calor | **0,967540** (0,968) | 0,9669 |
+| Supervivencia de plantas, 1 − Beta(2, 20) | 0,909091 (= 20/22) | — |
+| **Producto** | **0,787117** | |
+
+Las medias 0,895 y 0,968 que se citan en el texto son las del motor (con la
+Normal), no las empíricas. La de frío difiere en ~1 punto porque la serie
+real no es exactamente normal. La vecería no entra en el producto: tiene
+media 1 por construcción (`_media_veceria()`).
+
+**(c) Parámetro de escala.**
+
+    RENDIMIENTO_IDEAL_KG_HA = RENDIMIENTO_VALIDADO_KG_HA / _producto_esperado_factores()
+                            = 3.000 / 0,787117 = 3.811,3763 kg/ha
+
+Se define en `src/monte_carlo.py`, línea 345. `RENDIMIENTO_VALIDADO_KG_HA`
+(línea 37) se lee de Supuestos!B20 a través de `data/modelo_v2/supuestos.csv`
+(`rendimiento_plena_kg_ha`). El 3.811,38 es el default de
+`ParametrosMC.rendimiento_plena` (línea 359), y no está escrito en ningún
+lado: se recalcula al importar el módulo. Si cambian la calibración
+climática, la de supervivencia o el Excel, cambia solo. Es una constante de
+normalización, no un rendimiento observable: haría falta que frío, calor y
+supervivencia valieran 1 a la vez, y la supervivencia siempre es < 1.
+
+En la meseta (años 12-20) la curva de Monte Carlo vale 0,8667, el promedio
+de la curva del Excel en esos años. Por eso el rendimiento esperado de un
+año de meseta es 3.811,38 × 0,8667 × 0,787117 = 2.600 kg/ha, igual que el
+Excel (0,8667 × 3.000). El rendimiento sin penalidades climáticas es
+3.811,38 × 0,8667 = 3.303 kg/ha. Por eso un año de buen clima con año alto
+de vecería supera los 3.000 (ver el problema abierto sobre la amplitud de
+la vecería).
+
 ## Problemas abiertos
+
+### La descarga climática no fija ERA5-Land (`models` sin especificar)
+
+`src/data/climate_fetcher.py` consulta la API histórica de Open-Meteo sin
+el parámetro `models`, así que usa el default "Best Match". Los comentarios
+del motor y el texto de la tesis dicen "ERA5-Land". Según la documentación
+de Open-Meteo, Best Match combina IFS HRES, ERA5 y ERA5-Land. Mezclar
+fuentes puede introducir una discontinuidad en la serie (un salto de nivel
+o de varianza donde cambia el modelo), y eso importa para estimar
+tendencias (Mann-Kendall / Sen en el Módulo 0), además de para la media y
+el desvío que calibran el motor.
+
+**Decisión (2026-11-05):** se resuelve en la rama de la restricción
+climática, todo junto:
+
+1. Fijar `models=era5_land` en `climate_fetcher.py`.
+2. Volver a descargar 1990-2024.
+3. Recalibrar las constantes de frío y calor de `src/monte_carlo.py`
+   (hoy 984,3 / 212,7 h y 29,87 / 1,98 °C). Con ellas cambian solos
+   `RENDIMIENTO_IDEAL_KG_HA` y las medias de los factores.
+4. Regenerar Sobol, el dataset de ML, los surrogates y la descomposición de
+   varianza.
+
+**Antes de cambiar nada**, al arrancar esa rama: comparar las dos series
+(default Best Match vs. `era5_land`) en horas de frío y temperatura de
+verano. Para cada una: media, desvío y tendencia (Mann-Kendall modificado
+y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
+usuaria y recién después tocar constantes o datos. Hasta entonces no se
+toca nada.
 
 ### Valores de referencia "con quebrantos" fijados en el test
 
