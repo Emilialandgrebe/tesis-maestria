@@ -10,6 +10,16 @@ superficie configurable.
 
 ---
 
+## App
+
+Interfaz interactiva del simulador (Streamlit Community Cloud):
+**https://pistacho-jocoli.streamlit.app**
+
+Corre `app.py` desde la rama `main` con Python 3.12 y las dependencias de
+`requirements.txt`.
+
+---
+
 ## Notebooks
 
 | Módulo | Descripción | Colab |
