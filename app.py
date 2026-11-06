@@ -69,6 +69,39 @@ def _percentiles_por_año(df: pd.DataFrame, col: str, prefijo: str) -> pd.DataFr
     })
 
 
+UMBRAL_PERDIDA_USD = 500_000
+
+
+def _metricas_van(van: np.ndarray, tir: np.ndarray) -> dict:
+    """Métricas de resumen de una corrida, compartidas por las pestañas
+    Distribución del VAN y Comparar escenarios.
+
+    - TIR mediana: sin las simulaciones con TIR no definida (NaN).
+    - CVaR 10%: promedio del VAN en el 10% de simulaciones con menor VAN
+      (las ceil(0,1·n) peores).
+    """
+    n_peores = max(1, int(np.ceil(0.10 * len(van))))
+    return {
+        "van_medio": float(np.mean(van)),
+        "van_mediano": float(np.median(van)),
+        "prob_van_neg": float(np.mean(van < 0)),
+        "prob_perdida_grande": float(np.mean(van < -UMBRAL_PERDIDA_USD)),
+        "cvar_10": float(np.mean(np.sort(van)[:n_peores])),
+        "tir_mediana": float(np.nanmedian(tir)) if np.isfinite(tir).any() else float("nan"),
+        "n_tir_nan": int(np.isnan(tir).sum()),
+    }
+
+
+def _ayuda_tir(n_tir_nan: int, n: int) -> str:
+    if n_tir_nan == 0:
+        return f"Mediana de la TIR real. Las {n:,} simulaciones tienen TIR definida."
+    return (
+        f"Mediana de la TIR real. {n_tir_nan:,} de {n:,} simulaciones no tienen "
+        "TIR definida (no hay tasa entre −99% y 1.000% que anule el VAN) y se "
+        "excluyen de la mediana."
+    )
+
+
 @st.cache_data(show_spinner=False)
 def simular(
     hectareas: float,
@@ -264,26 +297,43 @@ tab_van, tab_fan, tab_sobol, tab_cmp = st.tabs(
 # ---------------------------------------------------------------------------
 
 with tab_van:
-    p10, p50, p90 = np.percentile(van, [10, 50, 90])
-    van_medio = float(np.mean(van))
-    prob_van_neg = float(np.mean(van < 0))
-    tir_media = float(np.nanmean(tir))
-    n_tir_nan = int(np.isnan(tir).sum())
+    p5, p10, p50, p90, p95 = np.percentile(van, [5, 10, 50, 90, 95])
+    m = _metricas_van(van, tir)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("VAN medio (año 20)", f"US$ {van_medio:,.0f}")
-    c2.metric("P(VAN < 0)", f"{prob_van_neg:.1%}")
-    c3.metric("TIR media", f"{tir_media:.2%}")
-
-    # "\$" escapado: dos "$" en el mismo st.markdown se renderizan como LaTeX.
-    st.markdown(
-        f"**P10:** US\\$ {p10:,.0f}  ·  **P50:** US\\$ {p50:,.0f}  ·  **P90:** US\\$ {p90:,.0f}"
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("VAN medio (año 20)", f"US$ {m['van_medio']:,.0f}")
+    c2.metric("VAN mediano (año 20)", f"US$ {m['van_mediano']:,.0f}")
+    c3.metric(
+        "Probabilidad de VAN negativo", f"{m['prob_van_neg']:.1%}",
+        help="Porcentaje de simulaciones en que el proyecto no alcanza la tasa exigida.",
     )
-    if n_tir_nan:
-        st.caption(
-            f"{n_tir_nan} de {len(tir)} simulaciones sin TIR definida (flujo sin "
-            "cambio de signo); se excluyen del promedio."
-        )
+    c4.metric(
+        "TIR mediana", f"{m['tir_mediana']:.2%}",
+        help=_ayuda_tir(m["n_tir_nan"], len(tir)),
+    )
+
+    tabla_riesgo = pd.DataFrame([{
+        "P5": p5,
+        "P10": p10,
+        "P50": p50,
+        "P90": p90,
+        "P95": p95,
+        f"P(pérdida > US$ {UMBRAL_PERDIDA_USD:,.0f})": m["prob_perdida_grande"],
+        "CVaR 10% (VAN medio del 10% peor)": m["cvar_10"],
+    }])
+    columnas_usd = [c for c in tabla_riesgo.columns if not c.startswith("P(pérdida")]
+    st.dataframe(
+        tabla_riesgo.style.format(
+            {**{c: "US$ {:,.0f}" for c in columnas_usd}, tabla_riesgo.columns[5]: "{:.1%}"}
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption(
+        "Percentiles del VAN al año 20. Pérdida = VAN por debajo de "
+        f"−US\\$ {UMBRAL_PERDIDA_USD:,.0f}. CVaR 10%: promedio del VAN en el "
+        "10% de simulaciones con peor resultado."
+    )
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
     ax.hist(van / 1e6, bins=60, color="#4C72B0", edgecolor="white", linewidth=0.3)
@@ -464,18 +514,37 @@ with tab_cmp:
     fig.tight_layout()
     st.pyplot(fig)
 
+    metricas_cmp = {e: _metricas_van(cmp[e]["van"], cmp[e]["tir"]) for e in ESCENARIOS}
+    col_perdida = f"P(pérdida > US$ {UMBRAL_PERDIDA_USD:,.0f})"
     tabla = pd.DataFrame(
         {
             "Escenario": ESCENARIOS,
-            "VAN medio (USD)": [float(np.mean(cmp[e]["van"])) for e in ESCENARIOS],
-            "P(VAN<0)": [float(np.mean(cmp[e]["van"] < 0)) for e in ESCENARIOS],
-            "TIR media": [float(np.nanmean(cmp[e]["tir"])) for e in ESCENARIOS],
+            "VAN medio (USD)": [metricas_cmp[e]["van_medio"] for e in ESCENARIOS],
+            "VAN mediano (USD)": [metricas_cmp[e]["van_mediano"] for e in ESCENARIOS],
+            "Probabilidad de VAN negativo": [metricas_cmp[e]["prob_van_neg"] for e in ESCENARIOS],
+            col_perdida: [metricas_cmp[e]["prob_perdida_grande"] for e in ESCENARIOS],
+            "CVaR 10% (USD)": [metricas_cmp[e]["cvar_10"] for e in ESCENARIOS],
+            "TIR mediana": [metricas_cmp[e]["tir_mediana"] for e in ESCENARIOS],
+            "Sin TIR definida": [metricas_cmp[e]["n_tir_nan"] for e in ESCENARIOS],
         }
     )
     st.dataframe(
         tabla.style.format(
-            {"VAN medio (USD)": "{:,.0f}", "P(VAN<0)": "{:.1%}", "TIR media": "{:.2%}"}
+            {
+                "VAN medio (USD)": "{:,.0f}",
+                "VAN mediano (USD)": "{:,.0f}",
+                "Probabilidad de VAN negativo": "{:.1%}",
+                col_perdida: "{:.1%}",
+                "CVaR 10% (USD)": "{:,.0f}",
+                "TIR mediana": "{:.2%}",
+                "Sin TIR definida": "{:,d}",
+            }
         ),
         use_container_width=True,
         hide_index=True,
+    )
+    st.caption(
+        "Probabilidad de VAN negativo: porcentaje de simulaciones en que el "
+        "proyecto no alcanza la tasa exigida. TIR mediana sin las simulaciones "
+        "sin TIR definida (columna de la derecha)."
     )
