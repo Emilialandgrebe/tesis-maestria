@@ -177,9 +177,8 @@ def cargar_sobol(ruta: str) -> pd.DataFrame:
 st.set_page_config(page_title="Monte Carlo — Pistacho Jocolí", layout="wide")
 st.title("Simulación de Monte Carlo — Pistacho Jocolí")
 st.caption(
-    "Interfaz sobre el motor (`src/monte_carlo.py`), sincronizado con el modelo "
-    "financiero v2 (Excel): 120 ha, USD constantes 2026, tasa real, precio AR(1) "
-    "en niveles calibrado con FRED."
+    "Interfaz sobre el motor (`src/monte_carlo.py`): 120 ha, USD constantes "
+    "2026, tasa real, precio AR(1) en niveles calibrado con FRED."
 )
 
 with st.sidebar:

@@ -35,7 +35,7 @@ Corre `app.py` desde la rama `main` con Python 3.12 y las dependencias de
 rendimientos con 5 fuentes de variabilidad, recalibrada contra el rendimiento
 validado del modelo financiero v2 (3.000 kg/ha a plena producción, ver
 `RENDIMIENTO_VALIDADO_KG_HA`/`RENDIMIENTO_IDEAL_KG_HA` en `src/monte_carlo.py`);
-estructura de costos e impuestos sincronizada con el modelo financiero v2
+estructura de costos e impuestos
 (`data/referencia/`, 120 ha por defecto: CAPEX con amortizaciones, personal,
 OPEX con rampa, maquila, IIBB, Ganancias y valor residual, en USD constantes
 y a tasa real 14,23%), con OPEX estocástico dentro de cada iteración y un
