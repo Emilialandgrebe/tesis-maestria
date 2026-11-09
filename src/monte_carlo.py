@@ -187,8 +187,9 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
 
     El punto de referencia (factor = 1.00) es la MEDIA HISTÓRICA REAL del
     sitio (calor_verano_media = 29.42 °C, calibrada con datos ERA5-Land de
-    Jocolí 1990-2024), no el rango óptimo agronómico teórico (35-38 °C,
-    Crane y Takeda, 1979; Ferguson, 2006). Mismo razonamiento que en
+    Jocolí 1990-2024), no un rango óptimo agronómico teórico (35-38 °C se
+    usa como referencia en el notebook 00, a validar con asesores
+    agronómicos: no se encontró fuente). Mismo razonamiento que en
     `_media_factor_frio`: centrar en el óptimo teórico penalizaría dos veces
     el déficit de calor que ya está implícito en RENDIMIENTO_VALIDADO_KG_HA
     (3.000 kg/ha) para este sitio.

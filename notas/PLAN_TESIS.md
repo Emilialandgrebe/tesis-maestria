@@ -1364,6 +1364,19 @@ días > 38 °C (3 por verano, crecientes) y las rachas tienen un nivel
 realista. Es la base para una futura rama descendente del factor de calor
 (hoy una limitación, ver "Limitaciones").
 
+**Rango "óptimo" de 35-38 °C (revisado el 2026-11-09).** El notebook lo
+atribuía a Crane y Takeda (1979) y Ferguson (2006), pero Crane y Takeda
+(1979) trata la falta de frío invernal, no el calor estival, y no se
+encontró una fuente que respalde ese rango. Las referencias consultadas no
+coinciden: material de Ferguson (UC Davis) da 25-30 °C y 2.200-2.800
+unidades de calor; Zhang et al. (2015) ubican la temperatura crítica alta
+del crecimiento del fruto en 32 °C; una circular de extensión de NMSU llama
+ideal a más de 38 °C. Se dejó 35-38 °C como **umbral de referencia, a
+validar con asesores agronómicos** (notebook 00, celdas de tmax y
+síntesis; docstring de `_media_factor_calor`), igual que el daño por
+encima de 40 °C. Hay que verificar las referencias completas antes de
+citarlas en la tesis.
+
 ### Escenario de estrés climático: tendencia de ERA5-Land sin renormalizar (rama `clima-era5`, 2026-11-09)
 
 **Por qué.** En el caso base el clima explica ~5% de la varianza del VAN
@@ -1484,7 +1497,7 @@ penalizan linealmente por debajo:
 | Calor | tmax diaria media, ene-feb | ≥ 29,42 °C | 22,12-29,42 °C | < 22,12 °C |
 
 Nunca superan 1: un año mejor que la media no suma, solo no resta. El
-centro es la media del sitio, no el óptimo agronómico (1.000 h; 35-38 °C),
+centro es la media del sitio, no un óptimo agronómico (1.000 h; 35-38 °C, este último sin fuente, a validar con asesores),
 para no penalizar dos veces el clima típico de Jocolí, que ya está implícito
 en los 3.000 kg/ha.
 
