@@ -1817,6 +1817,28 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 
 ---
 
+## Limitaciones
+
+Para el capítulo de limitaciones de la tesis.
+
+### Amortización del costo de implantación fuera del horizonte (sensibilidad de activación)
+
+En la sensibilidad "activar OPEX pre-productivo como costo de implantación"
+(Supuestos!B66 = 1), el OPEX de los años 1-6 (2.272.849 USD en el
+determinístico) se amortiza en 20 años desde el año 7. El horizonte de
+evaluación termina en el año 20, así que solo entran 14 cuotas. Las 6
+restantes (años 21-26), unos **682k USD**, quedan fuera del horizonte y
+nunca se deducen de Ganancias.
+
+En una finca que sigue operando después del año 20, esas cuotas se usarían
+igual. El modelo no las computa: no hay valor terminal por flujos
+posteriores al año 20, y el valor residual es solo la tierra. Por eso la
+sensibilidad de activación **subestima** algo el VAN, y la penalización de
+activar frente al caso base (−50k determinístico) está en parte inflada por
+el corte del horizonte.
+
+---
+
 ## Estructura de capítulos (borrador)
 
 - Capítulo 1: introducción, contexto del cultivo en Argentina, justificación del modelo de negocio, objetivos
