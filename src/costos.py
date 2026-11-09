@@ -63,11 +63,18 @@ class ParametrosCostos:
     afecta el valor residual: la tierra se recupera a su valor de compra.
 
     `quebrantos` activa el traslado de quebrantos impositivos (Supuestos
-    bloque 7 / hoja Quebrantos del Excel): la pérdida fiscal (EBIT < 0) de
-    un año se descuenta de la base de Ganancias de los `quebrantos_anios`
-    años siguientes, usando primero las más antiguas (FIFO). Default
-    apagado, igual que el Excel (criterio prudente hasta validar con el
-    contador). Ver `quebrantos_utilizados()`.
+    bloque 7 / hoja Quebrantos del Excel): la pérdida fiscal (base imponible
+    < 0) de un año se descuenta de la base de Ganancias de los
+    `quebrantos_anios` años siguientes, usando primero las más antiguas
+    (FIFO). Default ENCENDIDO: es el caso base del Excel (Supuestos!B64 = 1).
+    Ver `quebrantos_utilizados()`.
+
+    `activar_opex_pre` es una sensibilidad (Supuestos!B66, default apagado):
+    el OPEX de los años pre-productivos (1..Supuestos!B8) no se deduce en el
+    año sino que se activa como costo de implantación y se amortiza en línea
+    recta en `vida_util_implantacion` años desde la primera cosecha. Solo
+    cambia la base imponible de Ganancias, no la caja. Ver
+    `opex_pre_activado()`. Tratamiento fiscal a confirmar con el contador.
 
     Sincronizar `hectareas` con `ParametrosMC.hectareas` es responsabilidad
     de quien arma la simulación (`run_monte_carlo()` lo hace automático).
@@ -77,8 +84,10 @@ class ParametrosCostos:
     capex_factor: float = 1.0
     opex_variacion_pct: float = OPEX_VARIACION_PCT
     alicuota_ganancias: float = _MODELO.supuestos["alicuota_ganancias"]
-    quebrantos: bool = False
+    quebrantos: bool = True
     quebrantos_anios: int = int(_MODELO.supuestos["quebrantos_anios"])
+    activar_opex_pre: bool = False
+    vida_util_implantacion: int = int(_MODELO.supuestos["vida_util_implantacion"])
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
     def __post_init__(self) -> None:
@@ -101,6 +110,12 @@ class ParametrosCostos:
         if int(self.quebrantos_anios) != self.quebrantos_anios or self.quebrantos_anios < 1:
             raise ValueError(
                 f"quebrantos_anios debe ser un entero >= 1; recibido {self.quebrantos_anios!r}"
+            )
+        if (int(self.vida_util_implantacion) != self.vida_util_implantacion
+                or self.vida_util_implantacion < 1):
+            raise ValueError(
+                "vida_util_implantacion debe ser un entero >= 1; recibido "
+                f"{self.vida_util_implantacion!r}"
             )
 
     # ------------------------------------------------------------------
@@ -264,15 +279,50 @@ def opex_total(
     return operativo * multiplicador + params.alicuota_iibb * ingresos_usd
 
 
+def opex_pre_activado(
+    opex_usd: np.ndarray, params: ParametrosCostos
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    OPEX pre-productivo activado y su amortización, por simulación y año
+    1..T (hoja Flujo, filas 33 y 34). Ceros si `params.activar_opex_pre`
+    está apagado.
+
+        activado(t)   = OPEX(t)                       si 1 <= t <= B8
+        amortización  = sum(activado) / vida útil     si B8 < t <= B8 + vida útil
+
+    con B8 = último año pre-productivo. El total activado es el de cada
+    simulación (el OPEX es estocástico). Con vida útil 20 y horizonte 20,
+    solo se amortizan los años 7..20: el saldo no amortizado no se deduce
+    dentro del horizonte (igual que el Excel).
+    """
+    opex_usd = np.asarray(opex_usd, dtype=float)
+    activado = np.zeros_like(opex_usd)
+    amortizacion = np.zeros_like(opex_usd)
+    if not params.activar_opex_pre:
+        return activado, amortizacion
+    T = opex_usd.shape[1]
+    años = np.arange(1, T + 1)
+    ultimo_pre = params.modelo.supuestos["ultimo_anio_preproductivo"]
+    vida = int(params.vida_util_implantacion)
+    pre = años <= ultimo_pre
+    activado[:, pre] = opex_usd[:, pre]
+    cuota = activado.sum(axis=1, keepdims=True) / vida
+    en_amortizacion = (años > ultimo_pre) & (años <= ultimo_pre + vida)
+    amortizacion[:, en_amortizacion] = cuota
+    return activado, amortizacion
+
+
 def quebrantos_utilizados(ebit: np.ndarray, anios: int) -> np.ndarray:
     """
     Quebrantos impositivos usados en cada año, por simulación (hoja
     Quebrantos del Excel, fila 55).
 
-    Cada año con EBIT < 0 genera un quebranto igual a la pérdida. Un
+    `ebit` es la base imponible antes de quebrantos (Flujo!35; igual al
+    EBIT si no se activa el OPEX pre-productivo). Cada año con base < 0
+    genera un quebranto igual a la pérdida. Un
     quebranto originado en el año y puede usarse en los años t con
-    y < t <= y + `anios` (vence después); en cada año se consume hasta el
-    EBIT positivo, empezando por los de origen más antiguo (FIFO). El
+    y < t <= y + `anios` (vence después); en cada año se consume hasta la
+    base positiva, empezando por los de origen más antiguo (FIFO). El
     quebranto mantiene su valor nominal en USD constantes (Supuestos!D65:
     se asume actualizado).
 
@@ -314,32 +364,42 @@ def flujo_caja_neto(
 ) -> dict[str, np.ndarray]:
     """
     Flujo libre del proyecto por simulación y año 1..T, sin el CAPEX del
-    año 0 (hoja Flujo, filas 18-27 y 32):
+    año 0 (hoja Flujo, filas 18-27 y 32-35):
 
         EBITDA      = ingresos - OPEX
         EBIT        = EBITDA - amortizaciones
-        quebrantos  = quebrantos_utilizados(EBIT)  si params.quebrantos, si no 0
-        Ganancias   = max(0, (EBIT - quebrantos) * alícuota)   (Flujo!21)
+        base        = EBIT + OPEX activado - amortización implantación  (Flujo!35)
+        quebrantos  = quebrantos_utilizados(base)  si params.quebrantos, si no 0
+        Ganancias   = max(0, (base - quebrantos) * alícuota)   (Flujo!21)
         flujo       = EBITDA - Ganancias (+ valor residual en el año T)
+
+    La activación del OPEX pre-productivo (`opex_pre_activado()`) solo
+    mueve la base imponible: la caja cambia únicamente vía Ganancias.
 
     Retorna
     -------
-    dict con "ebitda", "quebrantos_utilizados", "impuesto_ganancias" y
+    dict con "ebitda", "opex_pre_activado", "amortizacion_implantacion",
+    "base_imponible", "quebrantos_utilizados", "impuesto_ganancias" y
     "flujo_neto", cada uno de la misma forma que `ingresos_usd`.
     """
     T = ingresos_usd.shape[1]
     ebitda = ingresos_usd - opex_usd
     ebit = ebitda - params.amortizaciones(T).reshape(1, T)
+    activado, amort_implantacion = opex_pre_activado(opex_usd, params)
+    base = ebit + activado - amort_implantacion
     if params.quebrantos:
-        usados = quebrantos_utilizados(ebit, int(params.quebrantos_anios))
+        usados = quebrantos_utilizados(base, int(params.quebrantos_anios))
     else:
-        usados = np.zeros_like(ebit)
-    impuesto = np.maximum(0.0, (ebit - usados) * params.alicuota_ganancias)
+        usados = np.zeros_like(base)
+    impuesto = np.maximum(0.0, (base - usados) * params.alicuota_ganancias)
 
     flujo = ebitda - impuesto
     flujo[:, -1] += params.valor_residual
     return {
         "ebitda": ebitda,
+        "opex_pre_activado": activado,
+        "amortizacion_implantacion": amort_implantacion,
+        "base_imponible": base,
         "quebrantos_utilizados": usados,
         "impuesto_ganancias": impuesto,
         "flujo_neto": flujo,

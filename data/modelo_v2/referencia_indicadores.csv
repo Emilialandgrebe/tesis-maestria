@@ -1,6 +1,6 @@
 indicador,valor,fuente
-van_usd,-240830.300461726,Flujo!B5
-tir_real,0.135698688494571,Flujo!B6
+van_usd,-67345.9948772936,Flujo!B5
+tir_real,0.140464139364327,Flujo!B6
 tasa_descuento_real,0.142305365853659,Flujo!G5
 capex_total_usd,2224279.23503268,CAPEX!F37
 escenario_precio,2.0,Supuestos!B22 (1/2/3)

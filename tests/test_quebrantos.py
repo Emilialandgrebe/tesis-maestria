@@ -1,8 +1,10 @@
-"""Traslado de quebrantos impositivos (FIFO con vencimiento).
+"""Traslado de quebrantos impositivos (FIFO con vencimiento) y activación
+del OPEX pre-productivo.
 
 Casos chicos armados a mano para la lógica de `quebrantos_utilizados()`
-(hoja Quebrantos del Excel v2), y la propiedad que importa en Monte Carlo:
-cada simulación lleva su propio saldo de quebrantos.
+(hoja Quebrantos del Excel v2) y de `opex_pre_activado()` (Flujo!33-34), y
+la propiedad que importa en Monte Carlo: cada simulación lleva su propio
+saldo de quebrantos y su propio total activado.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
-from src.costos import ParametrosCostos, quebrantos_utilizados  # noqa: E402
+from src.costos import ParametrosCostos, opex_pre_activado, quebrantos_utilizados  # noqa: E402
 from src.monte_carlo import ParametrosMC, run_monte_carlo  # noqa: E402
 
 
@@ -88,3 +90,42 @@ def test_monte_carlo_quebrantos_por_simulacion():
     np.testing.assert_array_equal(con["ingreso_usd"], sin["ingreso_usd"])
     np.testing.assert_array_equal(con["opex_usd"], sin["opex_usd"])
     assert (con["impuesto_ganancias_usd"] <= sin["impuesto_ganancias_usd"] + 1e-6).all()
+
+
+def test_opex_pre_activado_caso_chico():
+    """Último año pre-productivo 6 (Supuestos!B8): se activan los años 1-6
+    y la cuota (total / vida útil) se deduce desde el año 7 durante la vida
+    útil, cortada por el horizonte."""
+    opex = np.arange(1.0, 11.0).reshape(1, 10)  # años 1..10
+    costos = ParametrosCostos(activar_opex_pre=True, vida_util_implantacion=3)
+    activado, amort = opex_pre_activado(opex, costos)
+    np.testing.assert_array_equal(activado[0], [1, 2, 3, 4, 5, 6, 0, 0, 0, 0])
+    np.testing.assert_allclose(amort[0], [0, 0, 0, 0, 0, 0, 7, 7, 7, 0])
+
+    activado, amort = opex_pre_activado(opex, ParametrosCostos(activar_opex_pre=False))
+    assert not activado.any() and not amort.any()
+
+
+def test_vida_util_implantacion_invalida():
+    with pytest.raises(ValueError):
+        ParametrosCostos(vida_util_implantacion=0)
+    with pytest.raises(ValueError):
+        ParametrosCostos(vida_util_implantacion=12.5)
+
+
+def test_monte_carlo_activacion_por_simulacion():
+    """El total activado es el OPEX pre-productivo de cada simulación (el
+    OPEX es estocástico), y la activación no cambia ingresos ni OPEX."""
+    params = ParametrosMC(n_simulaciones=200, semilla=7)
+    con = run_monte_carlo(params, ParametrosCostos(activar_opex_pre=True))
+    sin = run_monte_carlo(params, ParametrosCostos(activar_opex_pre=False))
+
+    assert (sin["opex_pre_activado_usd"] == 0).all()
+    assert (sin["amortizacion_implantacion_usd"] == 0).all()
+    total = con.groupby("simulacion")["opex_pre_activado_usd"].sum()
+    assert total.nunique() > 1
+    cuota = con[con["año"] == 7].set_index("simulacion")["amortizacion_implantacion_usd"]
+    np.testing.assert_allclose(cuota, total / 20)
+
+    np.testing.assert_array_equal(con["ingreso_usd"], sin["ingreso_usd"])
+    np.testing.assert_array_equal(con["opex_usd"], sin["opex_usd"])

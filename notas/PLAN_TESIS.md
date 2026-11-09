@@ -1039,6 +1039,10 @@ principal: **62,4%** (10.000 simulaciones, `run_monte_carlo`; VAN medio
 
 ### Traslado de quebrantos impositivos: implementado, apagado por defecto (rama `quebrantos`, 2026-11-05)
 
+> **Superado el 2026-11-09:** el traslado de quebrantos pasó a ser el caso
+> base (default encendido). Ver la sección siguiente. Lo de abajo queda
+> como registro de la primera implementación.
+
 El Excel v2 agregó el traslado de quebrantos (Supuestos bloque 7: B64
 interruptor 0/1, B65 plazo de 5 años; hoja Quebrantos con lógica FIFO y
 vencimiento; Flujo!32 se resta del EBIT antes de Ganancias). El motor lo
@@ -1070,11 +1074,103 @@ las dos corridas):
 
 Todas las simulaciones usan quebrantos (media 2,25 M USD por simulación).
 
-**Decisión:** Sobol (`src/sensibilidad.py`), el dataset de ML
+**Decisión (vigente hasta el 2026-11-09):** Sobol (`src/sensibilidad.py`), el dataset de ML
 (`src/dataset_ml.py`) y la descomposición de varianza siguen **sin
 quebrantos**: es el default prudente del Excel (B64 = 0) hasta validarlo con
 el contador. Si se activa, hay que regenerar Sobol, dataset y surrogates. La
 pestaña Sobol de la app avisa cuando la casilla está activada.
+
+### Caso base fiscal: quebrantos activos y activación del OPEX pre-productivo como sensibilidad (rama `caso-base-fiscal`, 2026-11-09)
+
+Excel v2 actualizado (`data/referencia/`, copiado de "Modelo financiero -
+Pistacho Mendoza v2 (3).xlsx"):
+
+- **Caso base con quebrantos activos:** Supuestos!B64 = 1.
+- **Nueva sensibilidad:** Supuestos!B66 "Activar OPEX pre-productivo como
+  costo de implantación" (0/1, por defecto 0) y B67 vida útil = 20 años
+  desde la primera cosecha (criterio RT 22 / NIC 16; tratamiento en
+  Ganancias a confirmar con el contador).
+- **Tres filas nuevas al final de Flujo:**
+  - 33: OPEX pre-productivo activado = OPEX de los años 1..B8 (B8 = 6).
+  - 34: amortización del costo de implantación = total activado / 20, en
+    los años 7..26. Dentro del horizonte solo caen los años 7-20, así que
+    6/20 del total activado nunca se deducen.
+  - 35: base imponible = EBIT + 33 − 34.
+- **Ganancias (Flujo!21) y la hoja Quebrantos** ahora se calculan sobre la
+  base imponible (fila 35), no sobre el EBIT. La caja solo cambia vía
+  Ganancias.
+
+**Implementación:**
+
+- **Importador:** exporta `activar_opex_pre` y `vida_util_implantacion` a
+  `supuestos.csv` y las filas 33-35 a `referencia_flujo.csv`. Ahora
+  verifica la etiqueta de la columna A de todas las filas de Flujo que lee,
+  no solo de algunas.
+- **Motor** (`src/costos.py`):
+  - `ParametrosCostos(quebrantos=True, activar_opex_pre=False,
+    vida_util_implantacion=20)`.
+  - `opex_pre_activado()` arma las filas 33-34.
+  - `flujo_caja_neto()` pasa la base imponible a `quebrantos_utilizados()` y
+    a Ganancias.
+  - En Monte Carlo el total activado es el OPEX pre-productivo de cada
+    simulación.
+  - Columnas nuevas en el resultado: `opex_pre_activado_usd`,
+    `amortizacion_implantacion_usd` y `base_imponible_usd`.
+- **App:** la casilla "Traslado de quebrantos (5 años)" está activada por
+  defecto, y hay una casilla nueva "Activar OPEX pre-productivo (20 años)",
+  apagada.
+
+Determinístico (escenario base, 120 ha). El motor es igual al Excel en las
+cuatro combinaciones, con VAN y TIR al centavo y las filas 21 y 32-35 año
+por año. Se verificó recalculando el Excel con la librería `formulas` en
+cada posición de B64 y B66:
+
+| Quebrantos | Activación | VAN | TIR real | Quebrantos usados |
+|---|---|---|---|---|
+| sí | no (**caso base**) | −67.345,99 | 14,0464% | 472k (año 8), 1.524k (año 9), 268k (año 10) |
+| no | no | −240.830,30 | 13,5699% | — |
+| no | sí | −176.116,21 | 13,7505% | — |
+| sí | sí | −117.716,31 | 13,9099% | 358k (año 8), 364k (año 9) |
+
+Monte Carlo, escenario base: 120 ha, tasa real 14,23%, precio AR(1) en
+niveles, 10.000 simulaciones (`run_monte_carlo`, semilla 42, las mismas
+trayectorias en las cuatro corridas):
+
+| Quebrantos | Activación | VAN medio (EE) | Mediana | P(VAN<0) | TIR mediana |
+|---|---|---|---|---|---|
+| sí | no (**caso base**) | −44.421 (10.697) | −141.529 | 55,7% | 13,84% |
+| no | no | −216.067 (10.561) | −314.293 | 62,4% | 13,36% |
+| no | sí | −150.325 (10.588) | −247.457 | 59,9% | 13,55% |
+| sí | sí | −86.568 (10.561) | −185.308 | 57,4% | 13,72% |
+
+El error estándar de P(VAN<0) es de ~0,5 pp en todas las corridas.
+
+**Lectura:**
+
+- **Sin quebrantos, activar mejora el VAN** (+65k determinístico): las
+  pérdidas de los años 1-6 se perderían, y activándolas al menos 14/20 se
+  deducen.
+- **Con quebrantos, activar empeora el VAN** (−50k determinístico, −42k en
+  la media del Monte Carlo):
+  - El traslado ya aprovecha casi todas las pérdidas pre-productivas en los
+    años 8-10.
+  - La activación difiere esa deducción a 20 cuotas.
+  - 6 de esas cuotas quedan fuera del horizonte (~682k sin deducir).
+  - Si el contador confirma que la activación es obligatoria (y no
+    optativa), el caso base empeora.
+
+**Decisión: no se regeneran Sobol, el dataset de ML, los surrogates ni la
+descomposición de varianza.** Se regeneran **una sola vez, al final**,
+después de ERA5-Land (problema abierto de la descarga climática) y de la
+inferencia bayesiana, para no correr tres veces lo mismo. Mientras tanto:
+
+- Los parquets de `data/processed/` siguen calculados con el caso fiscal
+  anterior (sin quebrantos ni activación).
+- El código de `src/sensibilidad.py` y `src/dataset_ml.py` usa los defaults
+  de `ParametrosCostos`. Al regenerar van a usar el caso base nuevo (con
+  quebrantos) sin tocar nada.
+- La pestaña Sobol de la app avisa que los índices no reflejan los
+  interruptores fiscales del sidebar.
 
 ### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05)
 
@@ -1180,8 +1276,10 @@ climática, todo junto:
 3. Recalibrar las constantes de frío y calor de `src/monte_carlo.py`
    (hoy 984,3 / 212,7 h y 29,87 / 1,98 °C). Con ellas cambian solos
    `RENDIMIENTO_IDEAL_KG_HA` y las medias de los factores.
-4. Regenerar Sobol, el dataset de ML, los surrogates y la descomposición de
-   varianza.
+4. ~~Regenerar Sobol, el dataset de ML, los surrogates y la descomposición de
+   varianza.~~ Cambiado el 2026-11-09: no se regeneran en esa rama, sino
+   una sola vez al final, después de ERA5-Land y de la inferencia
+   bayesiana (ver "Caso base fiscal").
 
 **Antes de cambiar nada**, al arrancar esa rama: comparar las dos series
 (default Best Match vs. `era5_land`) en horas de frío y temperatura de
@@ -1190,30 +1288,50 @@ y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
 usuaria y recién después tocar constantes o datos. Hasta entonces no se
 toca nada.
 
-### Valores de referencia "con quebrantos" fijados en el test
+### Valores de referencia de las combinaciones fiscales fijados en el test
 
-El Excel se guarda con el interruptor en 0, así que su caché solo tiene los
-valores sin quebrantos (esos los exporta el importador y el test verifica
-que los CSV sigan sincronizados con el .xlsx). Los valores **con**
-quebrantos están escritos a mano en `REFERENCIA_CON_QUEBRANTOS`
-(`tests/test_consistencia_excel.py`): VAN −67.346,0, TIR 14,0464% y
-quebrantos de los años 8-10. Se verificaron recalculando el Excel con
-B64 = 1 (librería `formulas`, coinciden al centavo), pero **no se actualizan
-solos**: si cambia cualquier supuesto del Excel que mueva el EBIT, hay que
-volver a tomarlos (abrir el Excel, poner B64 = 1, leer Flujo!B5, Flujo!B6 y
-Flujo!32, y volver a dejar B64 = 0 antes de guardar).
+El Excel se guarda en el caso base (B64 = 1, B66 = 0). Su caché solo tiene
+esos valores: el importador los exporta y el test verifica que los CSV sigan
+sincronizados con el .xlsx.
+
+Las otras tres combinaciones de quebrantos y activación están escritas a
+mano en `REFERENCIAS` (`tests/test_consistencia_excel.py`):
+
+- VAN y TIR de cada combinación.
+- Quebrantos utilizados por año.
+- Total activado (2.272.848,83) y cuota de amortización (113.642,44).
+
+El caso base también está fijado ahí, y un test verifica que coincida con el
+CSV. Los valores se verificaron recalculando el Excel en cada combinación
+con la librería `formulas`, y coinciden al centavo. Pero **no se actualizan
+solos**: si cambia cualquier supuesto del Excel que mueva el EBIT o el OPEX
+pre-productivo, hay que volver a tomarlos. Para eso:
+
+1. Abrir el Excel y poner B64 y B66 en cada combinación.
+2. Leer Flujo!B5, Flujo!B6, Flujo!32 y Flujo!33-34.
+3. Volver a dejar el caso base (B64 = 1, B66 = 0) antes de guardar.
 
 ### Consulta al contador: ¿activar el OPEX pre-productivo como costo de implantación?
 
-Hoy el OPEX de los años pre-productivos (1-7) se deduce como gasto del año,
-lo que genera pérdidas fiscales grandes al principio. Con el traslado de
-quebrantos a 5 años, parte de esas pérdidas vence antes de que haya
-ganancias (años 1-2 y parte del 3). Preguntar al contador si esos costos
-pueden (o deben) activarse como costo de implantación del monte frutal y
-amortizarse desde la entrada en producción. Eso movería la deducción hacia
-los años con ganancia y evitaría el vencimiento, y cambiaría tanto el
-Excel (amortizaciones e Impuesto a las Ganancias) como el motor. Definirlo
-junto con la validación del traslado de quebrantos.
+**Modelado como sensibilidad desde el 2026-11-09:** Supuestos!B66,
+`ParametrosCostos(activar_opex_pre=...)` y una casilla en la app. Ver
+"Caso base fiscal".
+
+En el caso base, el OPEX de los años pre-productivos (1-6) se deduce como
+gasto del año. Con el traslado de quebrantos a 5 años, parte de esas
+pérdidas vence antes de que haya ganancias (años 1-2 y parte del 3).
+
+Activar ese OPEX y amortizarlo en 20 años **empeora** el VAN cuando hay
+quebrantos: −117.716 contra −67.346. Lo mejora solo si no hay quebrantos.
+Hay que preguntarle al contador:
+
+1. ¿La activación es optativa u obligatoria en Ganancias (RT 22 / NIC 16
+   son normas contables, no fiscales)?
+2. ¿La vida útil de 20 años es la correcta para el monte frutal?
+3. ¿Se confirma el traslado de quebrantos a 5 años en valores actualizados?
+
+Si la activación resulta obligatoria, pasa a ser el caso base y hay que
+cambiar el default.
 
 ### Amplitud de la vecería y P90 de producción por encima de 3.000 kg/ha — pendiente de calibrar con los asesores
 
@@ -1696,6 +1814,28 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 - Distribución del año en que el VAN acumulado cruza cero
 - Probabilidad de recuperar la inversión antes del año 12, 15 y 20
 - Precio mínimo de venta para que el proyecto sea viable dado un escenario climático específico
+
+---
+
+## Limitaciones
+
+Para el capítulo de limitaciones de la tesis.
+
+### Amortización del costo de implantación fuera del horizonte (sensibilidad de activación)
+
+En la sensibilidad "activar OPEX pre-productivo como costo de implantación"
+(Supuestos!B66 = 1), el OPEX de los años 1-6 (2.272.849 USD en el
+determinístico) se amortiza en 20 años desde el año 7. El horizonte de
+evaluación termina en el año 20, así que solo entran 14 cuotas. Las 6
+restantes (años 21-26), unos **682k USD**, quedan fuera del horizonte y
+nunca se deducen de Ganancias.
+
+En una finca que sigue operando después del año 20, esas cuotas se usarían
+igual. El modelo no las computa: no hay valor terminal por flujos
+posteriores al año 20, y el valor residual es solo la tierra. Por eso la
+sensibilidad de activación **subestima** algo el VAN, y la penalización de
+activar frente al caso base (−50k determinístico) está en parte inflada por
+el corte del horizonte.
 
 ---
 
