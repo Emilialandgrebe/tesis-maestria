@@ -37,7 +37,7 @@ def test_sin_estres_medias_constantes():
     assert np.all(calor == p.calor_verano_media)
 
 
-@pytest.mark.parametrize("variante", ["puntual", "extremo"])
+@pytest.mark.parametrize("variante", ["puntual", "extremo", "solo_frio_extremo"])
 def test_desplazamiento_lineal_desde_2024(variante):
     p = ParametrosMC(estres_climatico=True, estres_variante=variante)
     frio, calor = medias_climaticas(p)
@@ -53,6 +53,7 @@ def test_pendientes_son_las_de_era5_land():
     assert PENDIENTES_ESTRES_CLIMATICO == {
         "puntual": {"horas_frio": -2.65, "calor_verano": 0.088},
         "extremo": {"horas_frio": -11.92, "calor_verano": 0.131},
+        "solo_frio_extremo": {"horas_frio": -11.92, "calor_verano": 0.0},
     }
 
 

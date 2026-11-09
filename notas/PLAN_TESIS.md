@@ -1306,17 +1306,24 @@ estres_variante="puntual" | "extremo")`, `medias_climaticas()` en
 |---|---|---|---|---|
 | Puntual (Sen) | −2,65 | +0,088 | 990,8 → 940,4 h | 29,68 → 31,36 °C |
 | Extremo del IC95% | −11,92 | +0,131 | 962,9 → 736,5 h | 29,81 → 32,30 °C |
+| Solo frío (extremo) | −11,92 | 0 | 962,9 → 736,5 h | 29,42 (constante) |
 
 La tendencia de frío **no es significativa** (MK modificado p = 0,225, IC95%
 [−11,92; +3,82]): se usa solo como estrés. La de calor sí (p = 0,001).
 
-**Ojo con el signo del calor.** En el motor el factor de calor solo
-penaliza veranos **más frescos** que la media histórica (no hay penalidad
-por exceso de calor, ver "Interpretación del rendimiento de plena
-producción"). Una tendencia de calentamiento lo lleva a 1 y **sube** el
-rendimiento. El extremo +0,131 °C/año es el borde superior del IC95%, que
-en el motor es el *favorable*. El efecto negativo del escenario viene
-entero del frío. Por separado (10.000 simulaciones, caso base):
+**Interpretación: el riesgo climático dominante es el frío.** En el
+modelo, el factor de calor solo penaliza la **falta de acumulación
+térmica** (veranos más frescos que la media histórica); un verano igual o
+más cálido vale 1. Por eso calentar no resta: lleva el factor a 1 y sube
+levemente el rendimiento, y el extremo +0,131 °C/año del IC95% es, en el
+motor, el borde *favorable*. El riesgo climático dominante es la **pérdida
+de horas de frío**, consistente con el alto requerimiento de frío de la
+variedad Kerman (del orden de 1.000 h bajo 7 °C). La penalidad por exceso
+de calor (> 38-40 °C en la apertura de cáscara) **no se modela**: queda
+como limitación (ver "Limitaciones"). Por eso se agregó la variante "Solo
+frío (extremo)", que aplica solo la tendencia de frío del extremo del
+IC95% y deja el calor sin tendencia. Por separado (10.000 simulaciones,
+caso base):
 
 | Solo esa tendencia | Meseta (kg/ha) | VAN medio | P(VAN<0) |
 |---|---|---|---|
@@ -1325,9 +1332,6 @@ entero del frío. Por separado (10.000 simulaciones, caso base):
 | Frío extremo | 2.202 | −623.358 | 76,0% |
 | Calor extremo | 2.659 | +61.309 | 51,6% |
 
-Si se quiere un estrés de calor que reste, hace falta una penalidad por
-exceso de calor (> 38-40 °C en la apertura de cáscara), que hoy el motor no
-tiene: queda como problema abierto.
 
 **Resultados** (caso base con quebrantos, escenario de precio base, AR(1)
 en niveles, 10.000 simulaciones, semilla 42). Meseta = rendimiento medio de
@@ -1335,14 +1339,14 @@ los años 12-20; fracción de varianza del clima de
 `scripts/descomponer_varianza.py base 10000 niveles [puntual|extremo]`
 (simulaciones antitéticas, IC95% bootstrap):
 
-| | Sin estrés | Puntual | Extremo IC95% |
-|---|---|---|---|
-| Meseta (kg/ha), EE ≈ 2,6 | 2.596,5 | 2.567,6 | 2.254,3 |
-| Meseta año 12 → año 20 | 2.590 → 2.590 | 2.574 → 2.547 | 2.334 → 2.159 |
-| VAN medio (EE ≈ 10.600) | −47.614 | −75.948 | −534.225 |
-| P(VAN<0) (EE ≈ 0,5 pp) | 55,3% | 56,9% | 73,6% |
-| Clima: fracción al quitar (IC95%) | 4,6% (3,5–5,8) | 5,1% (3,8–6,3) | 7,9% (6,4–9,4) |
-| Clima: fracción sola | 5,1% | 5,6% | 8,0% |
+| | Sin estrés | Puntual | Extremo IC95% | Solo frío (extremo) |
+|---|---|---|---|---|
+| Meseta (kg/ha), EE ≈ 2,6 | 2.596,5 | 2.567,6 | 2.254,3 | 2.201,5 |
+| Meseta año 12 → año 20 | 2.590 → 2.590 | 2.574 → 2.547 | 2.334 → 2.159 | |
+| VAN medio (EE ≈ 10.600) | −47.614 | −75.948 | −534.225 | −623.358 |
+| P(VAN<0) (EE ≈ 0,5 pp) | 55,3% | 56,9% | 73,6% | **76,0%** |
+| Clima: fracción al quitar (IC95%) | 4,6% (3,5–5,8) | 5,1% (3,8–6,3) | 7,9% (6,4–9,4) | 8,4% (6,9–10,0) |
+| Clima: fracción sola | 5,1% | 5,6% | 8,0% | 8,3% |
 
 Sin estrés, el VAN medio da −47.614 contra −44.421 antes de la
 recalibración climática: la diferencia (~3.200) está dentro del error de
@@ -1370,7 +1374,7 @@ no está pareada simulación a simulación. En la versión antitética sí lo
 está (todo por PPF), y la descomposición de varianza usa esa.
 
 App: radio "Estrés climático" en el sidebar (sin estrés / puntual /
-extremo). Sobol y el dataset de ML no se regeneran: se hace una sola vez al
+extremo / solo frío extremo). Sobol y el dataset de ML no se regeneran: se hace una sola vez al
 final, después de ERA5-Land y del bayesiano.
 
 ### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05; recalibrado con ERA5-Land el 2026-11-09)
@@ -1493,16 +1497,6 @@ verano. Para cada una: media, desvío y tendencia (Mann-Kendall modificado
 y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
 usuaria y recién después tocar constantes o datos. Hasta entonces no se
 toca nada.
-
-### El motor no penaliza el exceso de calor
-
-El factor de calor vale 1 en cualquier verano igual o más cálido que la
-media histórica (29,42 °C), así que la tendencia de calentamiento sube el
-rendimiento en el escenario de estrés climático. La bibliografía del propio
-notebook 00 marca daño por encima de 38-40 °C (frutos vacíos, menor calibre,
-menor apertura). Para que un estrés de calor reste, haría falta una rama
-descendente de la función por encima de un umbral, calibrada con días > 38
-°C o rachas. A decidir con el director; no se toca sin pedido.
 
 ### Precipitación de ERA5 sesgada al alza en Jocolí (~656 mm/año contra ~150-200 reales)
 
@@ -2075,6 +2069,18 @@ posteriores al año 20, y el valor residual es solo la tierra. Por eso la
 sensibilidad de activación **subestima** algo el VAN, y la penalización de
 activar frente al caso base (−50k determinístico) está en parte inflada por
 el corte del horizonte.
+
+### El motor no penaliza el exceso de calor
+
+Decisión (2026-11-09): queda como limitación, no se modela. El factor de
+calor solo penaliza la falta de acumulación térmica (veranos más frescos
+que la media histórica, 29,42 °C) y vale 1 en cualquier verano igual o más
+cálido. La bibliografía del notebook 00 marca daño por encima de 38-40 °C
+en la apertura de cáscara (frutos vacíos, menor calibre). Con la serie
+ERA5-Land los días > 38 °C son raros (0,3 por verano, sin tendencia), así
+que el efecto omitido es chico en el clima histórico, pero el escenario de
+estrés climático no captura daño por calor: en él calentar suma
+levemente, y el riesgo que se reporta es el del frío.
 
 ---
 

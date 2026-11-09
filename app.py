@@ -52,6 +52,7 @@ _ESTRES_CLIMATICO = {
     "Sin estrés": None,
     "Tendencia de Sen (puntual)": "puntual",
     "Extremo del IC95%": "extremo",
+    "Solo frío (extremo)": "solo_frio_extremo",
 }
 _NOMBRE_PARAMETRO = {
     "tasa_descuento": "Tasa de descuento real",
@@ -275,7 +276,8 @@ with st.sidebar:
             "según la tendencia de Sen de ERA5-Land 1990-2024, extrapolada "
             "desde 2024 (año 1 del proyecto = 2027), sin renormalizar el "
             "rendimiento ideal. Puntual: frío -2,65 h/año, calor +0,088 °C/año. "
-            "Extremo del IC95%: frío -11,92 h/año, calor +0,131 °C/año. La "
+            "Extremo del IC95%: frío -11,92 h/año, calor +0,131 °C/año. Solo "
+            "frío (extremo): -11,92 h/año y calor sin tendencia. La "
             "tendencia de frío no es significativa (p = 0,23): se usa solo "
             "como estrés. En el motor el calor solo penaliza veranos más "
             "frescos que la media, así que la tendencia de calor sube el "

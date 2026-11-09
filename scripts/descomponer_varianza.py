@@ -47,11 +47,11 @@ Las dos planas miden cuánto del resultado depende de la suba real de la
 trayectoria.
 
 Cuarto argumento opcional, escenario de estrés climático
-(`ParametrosMC.estres_climatico`): `puntual` o `extremo` (pendiente de Sen
+(`ParametrosMC.estres_climatico`): `puntual`, `extremo` o `solo_frio_extremo` (pendiente de Sen
 de ERA5-Land o extremo de su IC95%). Sin él, clima sin tendencia.
 
 Uso:
-    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [niveles|retornos|niveles_plano|niveles_plano_8] [puntual|extremo]
+    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [niveles|retornos|niveles_plano|niveles_plano_8] [puntual|extremo|solo_frio_extremo]
 """
 
 from __future__ import annotations

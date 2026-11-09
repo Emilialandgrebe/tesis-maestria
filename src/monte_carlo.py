@@ -81,6 +81,9 @@ CORR_HORAS_FRIO_TMAX_VERANO = -0.2767
 PENDIENTES_ESTRES_CLIMATICO = {
     "puntual": {"horas_frio": -2.65, "calor_verano": 0.088},
     "extremo": {"horas_frio": -11.92, "calor_verano": 0.131},
+    # Solo la tendencia de frío del extremo del IC95% (el calor sin
+    # tendencia): aísla el riesgo climático que sí resta en el motor.
+    "solo_frio_extremo": {"horas_frio": -11.92, "calor_verano": 0.0},
 }
 ANIO_FIN_SERIE_CLIMATICA = 2024
 # Año calendario del año 0 del proyecto (CAPEX). El Excel no fija un año de
@@ -414,10 +417,11 @@ class ParametrosMC:
     # Escenario de estrés climático (ver PENDIENTES_ESTRES_CLIMATICO): las
     # medias de frío y calor se desplazan año a año según la tendencia de
     # Sen extrapolada desde 2024, sin renormalizar el rendimiento ideal.
-    # `estres_variante`: "puntual" (pendiente de Sen) o "extremo" (extremo
-    # del IC95%). Default apagado.
+    # `estres_variante`: "puntual" (pendiente de Sen), "extremo" (extremo
+    # del IC95%) o "solo_frio_extremo" (solo la tendencia de frío del
+    # extremo, calor sin tendencia). Default apagado.
     estres_climatico: bool = False
-    estres_variante: Literal["puntual", "extremo"] = "puntual"
+    estres_variante: Literal["puntual", "extremo", "solo_frio_extremo"] = "puntual"
     anio_cero_proyecto: int = ANIO_CERO_PROYECTO
 
     # Vecería: cadena de Markov sobre estado alto/bajo
