@@ -1275,6 +1275,95 @@ De Martonne en ~25 (semihúmedo), incompatible con la síntesis del notebook
 son homogéneas, pero los niveles de lluvia, déficit y De Martonne no son
 confiables. El motor no usa precipitación.
 
+### Niveles del capítulo climático corregidos contra normales SMN 1991-2020 (rama `clima-niveles`, 2026-11-09)
+
+**Problema.** La serie homogénea tiene tendencias confiables pero niveles
+sesgados en Jocolí: ERA5 da ~656 mm/año de lluvia (682,5 en 1991-2020),
+contra 150-250 mm reales, y ERA5-Land subestima la tmax de verano en
+~2,5 °C. Con eso el De Martonne daba ~25 (semihúmedo), y la síntesis del
+notebook no cerraba.
+
+**Fuente.** Normales climatológicas OMM 1991-2020 del SMN: *WMO
+Climatological Standard Normals for 1991-2020*, datos provistos por el
+Servicio Meteorológico Nacional, NCEI Accession 0253808
+(https://www.nodc.noaa.gov/archive/arc0216/0253808/3.3/data/0-data/Region-3-WMO-Normals-9120/Argentina/,
+archivos `MENDOZA_AERO_87418.csv` y `SAN_MARTIN_87416.csv`). La publicación
+del SMN, *Estadísticas Climatológicas Normales 1991-2020* (repositorio
+institucional, handle 20.500.12160/2506), tiene los mismos datos, pero no
+se pudo descargar: el repositorio respondía vacío. Para la cita conviene
+bajarla a mano.
+
+| Estación (OMM) | Distancia a Jocolí | Altura | Precip. anual | Tmax ene / feb |
+|---|---|---|---|---|
+| **Mendoza Aero (87418)**, referencia | ~31 km al S | 704 m | 238,1 mm | 32,8 / 31,0 °C |
+| San Martín (87416), control | ~58 km al SE | 653 m | 262,4 mm | 32,9 / 31,2 °C |
+| Mendoza Observatorio (87420), descartada (urbana, 827 m) | ~42 km | 827 m | 267,0 mm | 30,7 / 29,2 °C |
+
+**Método** (escalado de medias, `src/data/correccion_sesgo.py`; solo lo usa
+el notebook 00, **el motor no se toca**):
+
+- **Precipitación:** factor multiplicativo anual único = 238,1 / 682,5 =
+  **0,349**. Conserva el CV y el test de Mann-Kendall (τ idéntico; p
+  igual salvo redondeo).
+- **Tmax diaria:** corrimiento aditivo mensual = normal − media de la tmax
+  diaria de ERA5-Land del mes (1991-2020), de +0,9 °C (junio) a +2,7 °C
+  (enero); +2,70 en enero y +2,36 en febrero. Conserva el desvío y la
+  pendiente de Sen.
+- **ET0:** sin corregir. Las normales no la incluyen (no hay viento para
+  Penman-Monteith). Hargreaves con la tmax y la tmin de la normal da
+  ~1.451 mm contra 1.413 de ERA5 (~3%).
+- **Tmin, horas de frío, heladas, GDD:** sin corregir. La tmin de ERA5-Land
+  no tiene sesgo contra la normal (máximo 0,7 °C de diferencia mensual;
+  19,1 contra 19,3 °C en enero, 2,7 contra 2,0 °C en julio).
+- **Altura:** Jocolí (588 m) está 116 m más bajo que Mendoza Aero; con el
+  gradiente estándar sería ~0,75 °C más cálido. Se deja como nota, no se
+  aplica.
+- **Motor:** no cambia. El factor de calor está centrado en la media de su
+  propia serie con el mismo desvío, así que un corrimiento aditivo de la
+  tmax no cambia ninguna penalidad. Las horas de frío no se corrigen.
+
+**Antes / después** (1990-2024, notebook 00; MK modificado y Sen; entre
+paréntesis, el resultado con San Martín como control):
+
+| Indicador | Sin corregir (ERA5 / ERA5-Land) | Corregido, Mendoza Aero (San Martín) |
+|---|---|---|
+| Precipitación anual | 656 mm; −15,4 mm/año | **229 mm** (252); −5,4 mm/año (−5,9) |
+| Déficit hídrico: nivel | 772 mm | **1.199 mm** (1.176) |
+| Déficit hídrico: tendencia | +22,9 mm/año [14,1; 30,9], p = 0,0001 | **+13,0 mm/año** [8,3; 16,9], p < 0,0001 (+13,5) |
+| De Martonne: nivel y clase | 24,7, semihúmedo | **8,6, árido** (9,5, árido) |
+| De Martonne: tendencia | −0,62/año | −0,22/año (−0,24), p = 0,0002 |
+| Tmax media de verano | 29,42 °C | **31,96 °C** (32,10); Sen +0,088 sin cambio |
+| Días > 35 °C | 3,9; +0,17/año | **13,0** (13,7); +0,56/año (+0,56) |
+| Días > 38 °C | 0,3; sin tendencia (p = 0,45) | **3,0** (3,3); creciente, p < 0,001 |
+| Días > 40 °C | 0,06; sin tendencia | **0,66** (0,71); sin tendencia (p = 0,18) |
+| Racha máx. > 38 °C | 0,3 días; sin tendencia | **1,6 días** (1,6); creciente, p = 0,001 |
+| Racha máx. > 40 °C | 0,06 días; sin tendencia | **0,5 días** (0,5); sin tendencia |
+| Horas de frío | 999 h; −2,7 h/año, p = 0,23 | sin cambio (no se corrige) |
+
+Notas:
+
+- La tendencia del déficit baja a la mitad porque la lluvia (que se
+  escala) pesa menos y el déficit pasa a estar dominado por la ET0 (sin
+  corregir, +7,3 mm/año).
+- Los indicadores por umbral (días > 38 °C, rachas) **no** conservan la
+  tendencia: con el nivel corregido el umbral cae en otra parte de la
+  distribución, y la de días > 38 °C pasa a ser significativa. Es un
+  efecto esperado del umbral, no un problema del método.
+- Con San Martín los resultados cambian poco: lluvia +23 mm, De Martonne
+  +0,9 (sigue árido), tmax +0,15 °C, días > 35 °C +0,7. Las conclusiones
+  son las mismas.
+
+La síntesis del notebook 00 se reescribió con los niveles corregidos.
+Ahora explicita que las tendencias son de la serie homogénea
+ERA5/ERA5-Land, que los niveles están corregidos contra las normales SMN
+1991-2020, y que las horas de frío no requieren corrección porque la tmin
+no tiene sesgo.
+
+**Base para la penalidad por exceso de calor.** Con la tmax corregida, los
+días > 38 °C (3 por verano, crecientes) y las rachas tienen un nivel
+realista. Es la base para una futura rama descendente del factor de calor
+(hoy una limitación, ver "Limitaciones").
+
 ### Escenario de estrés climático: tendencia de ERA5-Land sin renormalizar (rama `clima-era5`, 2026-11-09)
 
 **Por qué.** En el caso base el clima explica ~5% de la varianza del VAN
@@ -1498,7 +1587,7 @@ y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
 usuaria y recién después tocar constantes o datos. Hasta entonces no se
 toca nada.
 
-### Precipitación de ERA5 sesgada al alza en Jocolí (~656 mm/año contra ~150-200 reales)
+### ~~Precipitación de ERA5 sesgada al alza en Jocolí (~656 mm/año contra ~150-200 reales)~~ — resuelto el 2026-11-09 para el capítulo climático (rama `clima-niveles`, ver "Niveles del capítulo climático corregidos contra normales SMN 1991-2020"; se usó la opción 2 con normales en vez de una serie de estación)
 
 La precipitación de ERA5 (0,25°) en el punto de Jocolí da 655,7 mm/año de
 media en 1990-2024 (725,8 hasta 2016), unas 3-4 veces la lluvia real de
@@ -2077,10 +2166,16 @@ calor solo penaliza la falta de acumulación térmica (veranos más frescos
 que la media histórica, 29,42 °C) y vale 1 en cualquier verano igual o más
 cálido. La bibliografía del notebook 00 marca daño por encima de 38-40 °C
 en la apertura de cáscara (frutos vacíos, menor calibre). Con la serie
-ERA5-Land los días > 38 °C son raros (0,3 por verano, sin tendencia), así
-que el efecto omitido es chico en el clima histórico, pero el escenario de
-estrés climático no captura daño por calor: en él calentar suma
+ERA5-Land sin corregir los días > 38 °C parecían raros (0,3 por verano, sin
+tendencia), pero el escenario de estrés climático no captura daño por
+calor: en él calentar suma
 levemente, y el riesgo que se reporta es el del frío.
+
+Con la tmax corrida al nivel de las normales SMN (rama `clima-niveles`)
+los días > 38 °C son ~3 por verano y crecientes (0,3 sin corregir), así
+que el efecto omitido es mayor de lo que sugería la serie cruda. La tmax
+corregida del notebook 00 deja la base para calibrar una futura penalidad
+por exceso de calor (días > 38-40 °C o rachas).
 
 ---
 
