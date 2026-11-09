@@ -13,7 +13,9 @@ Archivos que genera:
 - anual.csv       series por año 0-20: curva de rendimiento, precios por
                   escenario y rampa de fertilización (Supuestos, filas 54-58)
 - referencia_flujo.csv        flujo de fondos año a año de la hoja Flujo
-                              (incluye la fila 32, quebrantos utilizados)
+                              (incluye las filas 32-35: quebrantos utilizados,
+                              OPEX pre-productivo activado, amortización del
+                              costo de implantación y base imponible)
 - referencia_indicadores.csv  VAN, TIR, tasa y CAPEX total del Excel
 
 Los dos `referencia_*` no los usa el motor: son el blanco contra el que
@@ -66,6 +68,8 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "tasa_descuento_real": ("Supuestos!B49", "fracción/año", "Tasa de descuento real"),
     "quebrantos_aplicar": ("Supuestos!B64", "0/1", "Aplicar traslado de quebrantos"),
     "quebrantos_anios": ("Supuestos!B65", "años", "Años de traslado de quebrantos"),
+    "activar_opex_pre": ("Supuestos!B66", "0/1", "Activar OPEX pre-productivo como costo de implantación"),
+    "vida_util_implantacion": ("Supuestos!B67", "años", "Vida útil del costo de implantación activado"),
     "tasa_rf": ("Tasa!B6", "fracción/año", "Tasa libre de riesgo"),
     "prima_mercado": ("Tasa!B7", "fracción/año", "Prima de riesgo de mercado"),
     "beta_desapalancada": ("Tasa!B8", "-", "Beta desapalancada"),
@@ -240,23 +244,43 @@ _FILAS_FLUJO = {
     "valor_residual_usd": 26,
     "flujo_evaluacion_usd": 27,
     "flujo_descontado_usd": 30,
-    # Fila agregada al final de la hoja (después del flujo descontado
-    # acumulado): Flujo!21 resta estos quebrantos del EBIT antes de Ganancias.
+    # Filas agregadas al final de la hoja (después del flujo descontado
+    # acumulado). Base imponible (35) = EBIT + OPEX activado (33) −
+    # amortización del costo de implantación (34); Flujo!21 calcula Ganancias
+    # sobre la base imponible menos los quebrantos utilizados (32).
     "quebrantos_utilizados_usd": 32,
+    "opex_pre_activado_usd": 33,
+    "amortizacion_implantacion_usd": 34,
+    "base_imponible_usd": 35,
 }
 
 # Etiqueta esperada en la columna A de las filas de Flujo que se leen por
 # número: si alguien inserta una fila en el medio, falla en vez de exportar
 # la fila equivocada.
 _ETIQUETAS_FLUJO = {
+    16: "(+) Ingresos por ventas",
+    17: "(−) OPEX",
+    18: "(=) EBITDA",
+    19: "(−) Amortizaciones",
+    20: "(=) Resultado operativo (EBIT)",
     21: "(−) Impuesto a las Ganancias",
+    24: "(−) CAPEX",
+    25: "(=) Flujo libre del proyecto",
+    26: "(+) Valor residual",
+    27: "(=) Flujo para evaluación",
     30: "Flujo descontado",
     32: "Quebrantos utilizados",
+    33: "OPEX pre-productivo activado",
+    34: "Amortización del costo de implantación",
+    35: "Base imponible de Ganancias",
 }
 
 
 def _exportar_referencia(valores) -> tuple[pd.DataFrame, pd.DataFrame]:
     hv = valores["Flujo"]
+    sin_etiqueta = set(_FILAS_FLUJO.values()) - set(_ETIQUETAS_FLUJO)
+    if sin_etiqueta:
+        raise ValueError(f"Filas de Flujo leídas sin etiqueta esperada: {sorted(sin_etiqueta)}")
     for fila, etiqueta in _ETIQUETAS_FLUJO.items():
         texto_a = str(hv[f"A{fila}"].value or "")
         if not texto_a.startswith(etiqueta):

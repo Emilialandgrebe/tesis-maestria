@@ -10,9 +10,11 @@ Secciones:
   `data/processed/sobol_indices.parquet` -- NO se recalcula en vivo).
 - Comparación de los tres escenarios de precio a los parámetros del sidebar.
 
-El sidebar incluye el traslado de quebrantos impositivos (apagado por
-defecto, como en el Excel); aplica a todas las pestañas salvo Sobol, que
-está pre-calculado sin quebrantos.
+El sidebar incluye los dos interruptores fiscales del Excel: traslado de
+quebrantos (encendido por defecto, caso base) y activación del OPEX
+pre-productivo como costo de implantación (apagado por defecto,
+sensibilidad). Aplican a todas las pestañas salvo Sobol, que está
+pre-calculado con el caso fiscal anterior (sin quebrantos ni activación).
 
 Ejecutar:  streamlit run app.py
 """
@@ -112,7 +114,8 @@ def simular(
     modo_precio: str,
     n_simulaciones: int,
     semilla: int,
-    quebrantos: bool = False,
+    quebrantos: bool = True,
+    activar_opex_pre: bool = False,
 ) -> dict:
     """Corre `run_monte_carlo()` una vez y devuelve lo que necesita la UI.
 
@@ -141,7 +144,9 @@ def simular(
         modo_precio="ar1" if modo_precio == "ar1_retornos" else modo_precio,
         semilla=semilla,
     )
-    costos = ParametrosCostos(hectareas=hectareas, quebrantos=quebrantos)
+    costos = ParametrosCostos(
+        hectareas=hectareas, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
+    )
     precio_params = precio_retornos_estres(escenario) if modo_precio == "ar1_retornos" else None
     df = run_monte_carlo(params, costos, precio_params)
     # `resumen_financiero` necesita el MISMO objeto `costos` usado en la corrida
@@ -253,12 +258,23 @@ with st.sidebar:
     )
 
     quebrantos = st.checkbox(
-        "Traslado de quebrantos (5 años)", value=False,
+        "Traslado de quebrantos (5 años)", value=True,
         help=(
-            "Las pérdidas fiscales (EBIT < 0) se descuentan de la base de "
-            "Ganancias de los 5 años siguientes, las más antiguas primero "
-            "(hoja Quebrantos del Excel). Se calcula por simulación. "
-            "Default: desactivado, criterio prudente hasta validar con el contador."
+            "Las pérdidas fiscales (base imponible < 0) se descuentan de la "
+            "base de Ganancias de los 5 años siguientes, las más antiguas "
+            "primero (hoja Quebrantos del Excel). Se calcula por simulación. "
+            "Default: activado (caso base del Excel)."
+        ),
+    )
+
+    activar_opex_pre = st.checkbox(
+        "Activar OPEX pre-productivo (20 años)", value=False,
+        help=(
+            "Sensibilidad: el OPEX de los años 1-6 no se deduce en el año sino "
+            "que se activa como costo de implantación y se amortiza en 20 "
+            "años desde la primera cosecha (criterio RT 22 / NIC 16). Solo "
+            "cambia la base de Ganancias, no la caja. Default: desactivado; "
+            "tratamiento fiscal a confirmar con el contador."
         ),
     )
 
@@ -278,6 +294,7 @@ _args_comunes = dict(
     n_simulaciones=int(n_simulaciones),
     semilla=SEMILLA,
     quebrantos=bool(quebrantos),
+    activar_opex_pre=bool(activar_opex_pre),
 )
 
 with st.spinner("Corriendo Monte Carlo…"):
@@ -445,11 +462,13 @@ with tab_sobol:
                 "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
                 "vivo, así que no reflejan el modelo seleccionado."
             )
-        if quebrantos:
+        if quebrantos or activar_opex_pre:
             st.info(
-                "El traslado de quebrantos está activado en el sidebar, pero "
-                "estos índices se pre-calcularon sin quebrantos (default "
-                "prudente, ver notas/PLAN_TESIS.md)."
+                "Estos índices se pre-calcularon con el caso fiscal anterior "
+                "(sin traslado de quebrantos ni activación del OPEX "
+                "pre-productivo) y no reflejan los interruptores fiscales del "
+                "sidebar. Se regeneran una sola vez al final, después de "
+                "ERA5-Land y de la inferencia bayesiana (ver notas/PLAN_TESIS.md)."
             )
         etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
         fig, ax = plt.subplots(figsize=(8, 3.8))
@@ -492,6 +511,7 @@ with tab_cmp:
         f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
         f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
         f"{'con' if quebrantos else 'sin'} traslado de quebrantos, "
+        f"{'con' if activar_opex_pre else 'sin'} activación del OPEX pre-productivo, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):
