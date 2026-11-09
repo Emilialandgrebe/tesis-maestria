@@ -1172,7 +1172,105 @@ inferencia bayesiana, para no correr tres veces lo mismo. Mientras tanto:
 - La pestaña Sobol de la app avisa que los índices no reflejan los
   interruptores fiscales del sidebar.
 
-### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05)
+### Serie climática homogénea: temperatura ERA5-Land, precipitación y ET0 ERA5 (rama `clima-era5`, 2026-11-09)
+
+**El problema.** `climate_fetcher.py` consultaba la API histórica de
+Open-Meteo sin `models`, o sea con el default "Best Match". Según la
+documentación, Best Match "combines IFS HRES, ERA5 and ERA5-Land
+seamlessly", y ECMWF IFS (9 km) está disponible "2017 to present". La misma
+página recomienda: "when studying climate change over decades, it is
+advisable to exclusively utilise ERA5 or ERA5-Land" y "Select ERA5 or
+ERA5-Land for consistent data over multiple decades"
+(https://open-meteo.com/en/docs/historical-weather-api).
+
+**El salto de 2017.** Se descargó 1990-2024 con `models=era5_land` y se
+comparó con la serie Best Match guardada. En temperatura las dos son
+**idénticas año por año entre 1990 y 2016**, y se separan desde 2017, cuando
+entra IFS 9 km:
+
+- Tmax media de verano: Best Match queda +1,97 °C por encima en promedio
+  desde 2017, y la brecha crece de +1,13 (2017) a +3,06 °C (2024). El test
+  de Pettitt sobre la diferencia ubica el cambio en 2017 (p ≈ 0,004).
+- Horas de frío: Best Match queda −63 h por debajo en promedio desde 2017
+  (entre +31 y −200 h). Mann-Whitney p = 0,004 y Welch p = 0,06; Pettitt no
+  lo detecta (p = 0,41) porque la diferencia varía mucho de un año a otro.
+
+| Variable | Fuente | Media | Desvío | MK modif. τ (p) | Sen /año [IC95%] |
+|---|---|---|---|---|---|
+| Horas de frío | Best Match | 984,3 h | 212,7 | −0,18 (0,074) | −4,83 [−13,05; +1,55] |
+| | **ERA5-Land** | **998,7 h** | **220,4** | −0,12 (0,225) | **−2,65 [−11,92; +3,82]** |
+| Tmax verano | Best Match | 29,87 °C | 1,98 | +0,59 (<0,0001) | +0,149 [+0,103; +0,191] |
+| | **ERA5-Land** | **29,42 °C** | **1,54** | +0,39 (0,001) | **+0,088 [+0,040; +0,131]** |
+
+La tendencia de calor de Best Match estaba inflada por el cambio de modelo.
+Con ERA5-Land el calentamiento sigue siendo significativo, pero es de
+~3 °C en 1990-2024, no ~5 °C.
+
+**Precipitación y ET0.** Con `models=era5_land` la API devuelve esas dos
+columnas vacías. Se descargaron con `models=era5` (1990-2024 completo, sin
+faltantes). Comparación con Best Match:
+
+| Variable | Período | Best Match | ERA5 | Diferencia media | Correlación anual |
+|---|---|---|---|---|---|
+| Precipitación (mm/año) | 1990-2016 | 725,8 | 725,8 | −0,01 (idéntica hora a hora) | 1,000 |
+| | 2017-2024 | 188,4 | 419,0 | −230,6 | 0,83 |
+| ET0 (mm/año) | 1990-2016 | 1.388,3 | 1.395,9 | −7,6 | 0,995 |
+| | 2017-2024 | 1.743,1 | 1.535,7 | +207,4 | 0,77 |
+
+Hasta 2016 Best Match ya usaba ERA5 para la lluvia. La ET0 difiere poco
+porque Best Match la calculaba con la temperatura de ERA5-Land. Desde 2017
+las dos variables saltan, en sentidos opuestos (menos lluvia y más ET0 en
+Best Match), lo que **inflaba la tendencia del déficit hídrico**.
+
+**Fuente por variable** (`FUENTE_POR_VARIABLE` en
+`src/data/climate_fetcher.py`; `fetch_climate_data()` arma la serie
+homogénea por defecto):
+
+| Variable | Modelo | Archivo |
+|---|---|---|
+| Temperatura 2 m | ERA5-Land (0,1°) | `data/raw/clima_jocoli_era5_land.parquet` |
+| Precipitación | ERA5 (0,25°) | `data/raw/clima_jocoli_era5.parquet` |
+| ET0 FAO | ERA5 (0,25°) | `data/raw/clima_jocoli_era5.parquet` |
+
+La serie Best Match queda en `data/raw/clima_jocoli.parquet` solo como
+registro (`fetch_climate_data(fuente="best_match")`).
+
+**Motor recalibrado:**
+
+- Frío 998,7 / 220,4 h y calor 29,42 / 1,54 °C (antes 984,3 / 212,7 y
+  29,87 / 1,98).
+- Rendimiento ideal 3.792,57 kg/ha (antes 3.811,38).
+- Correlación frío-calor −0,2767, p = 0,108 (antes −0,2894, p = 0,092),
+  sigue no significativa y apagada por defecto.
+- La meseta del Monte Carlo sigue en 2.600 kg/ha (2.596,5, EE 2,6).
+- Pasan todos los tests.
+
+**Notebook 00 corrido de nuevo** con la serie homogénea (se actualizaron la
+fuente de la introducción, la conclusión de la tendencia de calor y las
+notas al pie de los gráficos hídricos):
+
+| Indicador | Antes (Best Match) | Ahora (ERA5-Land / ERA5) |
+|---|---|---|
+| Tmax verano: Sen [IC95%], MK p | +0,149 [0,103; 0,191] °C/año, p < 0,0001 | +0,088 [0,040; 0,131] °C/año, p = 0,001 |
+| Tmax verano: aumento 1990-2024 | ~5 °C | ~3 °C |
+| Días > 35 °C: media; Sen | 6,2 días; +0,48/año (p < 0,0001) | 3,9 días; +0,17/año (p < 0,0001) |
+| Días > 38 °C: media; tendencia | 1,2 días; creciente (p < 0,0001) | 0,3 días; sin tendencia (p = 0,45) |
+| Racha > 38 °C: tendencia | creciente (p = 0,002) | sin tendencia (p = 0,42) |
+| GDD brotación: media; Sen | 433; +6,2/año | 408; +3,0/año (p = 0,002) |
+| Horas de frío: media; Sen; MK p | 984 h; −4,8 h/año; p = 0,074 | 999 h; −2,7 h/año; p = 0,225 |
+| Años < 800 h (críticos) | 7 de 35 (20%) | 6 de 35 (17%) |
+| Déficit hídrico: media; Sen | 866 mm; +37,7 mm/año | 772 mm; +22,9 mm/año (p = 0,0001) |
+| De Martonne: media; Sen | 22,7; −0,89/año | 24,7; −0,62/año (p = 0,0002) |
+
+**Cuidado con la precipitación de ERA5** (problema abierto aparte): da
+~656 mm/año de media (726 hasta 2016), cuando en Lavalle llueven
+~150-200 mm (el propio notebook dice "no supera los 150 mm"). Eso deja el
+De Martonne en ~25 (semihúmedo), incompatible con la síntesis del notebook
+("árido a hiperárido"). Ya pasaba con Best Match hasta 2016. Las tendencias
+son homogéneas, pero los niveles de lluvia, déficit y De Martonne no son
+confiables. El motor no usa precipitación.
+
+### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05; recalibrado con ERA5-Land el 2026-11-09)
 
 Los 3.000 kg/ha del Excel (Supuestos!B20) son, en el motor, el rendimiento
 **esperado** de plena producción en el clima de Jocolí, no un techo. El
@@ -1180,42 +1278,45 @@ motor lo logra con una constante de escala mayor, que se reduce al
 multiplicarla por factores que solo penalizan.
 
 **(a) Funciones de frío y calor.** `_media_factor_frio()` y
-`_media_factor_calor()` (`src/monte_carlo.py`, líneas 113 y 152) valen 1,00
+`_media_factor_calor()` (`src/monte_carlo.py`, líneas 117 y 156) valen 1,00
 cuando la variable climática está en su media histórica o por encima, y
 penalizan linealmente por debajo:
 
 | Factor | Variable | Centro (factor 1) | Zona moderada (0,70-1,00) | Severa (0,40-0,70) |
 |---|---|---|---|---|
-| Frío | horas < 7 °C, mayo-sep | ≥ 984,3 h | 784,3-984,3 h | < 784,3 h |
-| Calor | tmax diaria media, ene-feb | ≥ 29,87 °C | 22,57-29,87 °C | < 22,57 °C |
+| Frío | horas < 7 °C, mayo-sep | ≥ 998,7 h | 798,7-998,7 h | < 798,7 h |
+| Calor | tmax diaria media, ene-feb | ≥ 29,42 °C | 22,12-29,42 °C | < 22,12 °C |
 
 Nunca superan 1: un año mejor que la media no suma, solo no resta. El
 centro es la media del sitio, no el óptimo agronómico (1.000 h; 35-38 °C),
 para no penalizar dos veces el clima típico de Jocolí, que ya está implícito
 en los 3.000 kg/ha.
 
-La calibración está escrita a mano en `src/monte_carlo.py` (líneas 42-45:
-984,3 / 212,7 h y 29,87 / 1,98 °C) y coincide con
+La calibración está escrita a mano en `src/monte_carlo.py` (líneas 45-48:
+998,7 / 220,4 h y 29,42 / 1,54 °C) y coincide con
 `data/processed/features_climaticas.parquet` (35 años, 1990-2024: medias
-984,26 h y 29,87 °C, desvíos muestrales 212,65 h y 1,98 °C). Ese parquet sale
-de `data/raw/clima_jocoli.parquet`, descargado por
-`src/data/climate_fetcher.py` de la API histórica de Open-Meteo
-(`archive-api.open-meteo.com`) para −32,5833 / −68,6833.
+998,74 h y 29,42 °C, desvíos muestrales 220,44 h y 1,54 °C). Ese parquet sale
+de la temperatura de `data/raw/clima_jocoli_era5_land.parquet`, descargada
+por `src/data/climate_fetcher.py` de la API histórica de Open-Meteo
+(`archive-api.open-meteo.com`, `models=era5_land`) para −32,5833 /
+−68,6833. Hasta el 2026-11-09 la calibración era 984,3 / 212,7 h y
+29,87 / 1,98 °C, sobre la serie "Best Match" (ver "Serie climática
+homogénea").
 
 Tres precisiones para el texto:
 
 - **"Años normales o buenos"** quiere decir aquí "en la media histórica o por
   encima". Con las variables normales del motor, la mitad de los años se
-  penaliza por construcción. En la serie real son el 46% de los años en frío
-  y el 54% en calor.
+  penaliza por construcción. En la serie real son el 51% de los años en frío
+  y el 46% en calor.
 - **"Valor 1" es la media del factor, no cada valor sorteado.** El factor
   sorteado es una Beta con esa media (precisión κ = 15). En un año sin
   penalidad la media se recorta a 0,9999 para que la Beta exista, así que el
   factor sorteado es ≈ 1 pero siempre ≤ 1.
-- **El código no fija ERA5-Land.** La consulta no pasa el parámetro
-  `models`, así que usa la combinación por defecto de la API histórica de
-  Open-Meteo. Los comentarios del código dicen "ERA5-Land / Open-Meteo",
-  pero eso no está garantizado por la consulta (ver Problemas abiertos).
+- **ERA5-Land fijado explícitamente** desde el 2026-11-09
+  (`models=era5_land`). Antes la consulta no pasaba `models` y usaba
+  "Best Match", que desde 2017 es ECMWF IFS (ver "Serie climática
+  homogénea").
 
 **(b) Medias de los factores.** `_esperanza_factor_frio()` y
 `_esperanza_factor_calor()` integran numéricamente cada función contra una
@@ -1223,25 +1324,26 @@ Normal(media, desvío) con la calibración de arriba:
 
 | Factor | Media en el motor (Normal) | Media empírica sobre los 35 años |
 |---|---|---|
-| Frío | **0,894877** (0,895) | 0,9035 |
-| Calor | **0,967540** (0,968) | 0,9669 |
+| Frío | **0,892660** (0,893) | 0,8968 |
+| Calor | **0,974752** (0,975) | 0,9740 |
 | Supervivencia de plantas, 1 − Beta(2, 20) | 0,909091 (= 20/22) | — |
-| **Producto** | **0,787117** | |
+| **Producto** | **0,791020** | |
 
-Las medias 0,895 y 0,968 que se citan en el texto son las del motor (con la
-Normal), no las empíricas. La de frío difiere en ~1 punto porque la serie
-real no es exactamente normal. La vecería no entra en el producto: tiene
+Las medias 0,893 y 0,975 que se citan en el texto son las del motor (con la
+Normal), no las empíricas. Con Best Match eran 0,895 y 0,968 (producto
+0,787117). La vecería no entra en el producto: tiene
 media 1 por construcción (`_media_veceria()`).
 
 **(c) Parámetro de escala.**
 
     RENDIMIENTO_IDEAL_KG_HA = RENDIMIENTO_VALIDADO_KG_HA / _producto_esperado_factores()
-                            = 3.000 / 0,787117 = 3.811,3763 kg/ha
+                            = 3.000 / 0,791020 = 3.792,5695 kg/ha
 
-Se define en `src/monte_carlo.py`, línea 345. `RENDIMIENTO_VALIDADO_KG_HA`
+(con Best Match era 3.000 / 0,787117 = 3.811,38). Se define en
+`src/monte_carlo.py`, línea 349. `RENDIMIENTO_VALIDADO_KG_HA`
 (línea 37) se lee de Supuestos!B20 a través de `data/modelo_v2/supuestos.csv`
-(`rendimiento_plena_kg_ha`). El 3.811,38 es el default de
-`ParametrosMC.rendimiento_plena` (línea 359), y no está escrito en ningún
+(`rendimiento_plena_kg_ha`). El 3.792,57 es el default de
+`ParametrosMC.rendimiento_plena` (línea 363), y no está escrito en ningún
 lado: se recalcula al importar el módulo. Si cambian la calibración
 climática, la de supervivencia o el Excel, cambia solo. Es una constante de
 normalización, no un rendimiento observable: haría falta que frío, calor y
@@ -1249,15 +1351,16 @@ supervivencia valieran 1 a la vez, y la supervivencia siempre es < 1.
 
 En la meseta (años 12-20) la curva de Monte Carlo vale 0,8667, el promedio
 de la curva del Excel en esos años. Por eso el rendimiento esperado de un
-año de meseta es 3.811,38 × 0,8667 × 0,787117 = 2.600 kg/ha, igual que el
-Excel (0,8667 × 3.000). El rendimiento sin penalidades climáticas es
-3.811,38 × 0,8667 = 3.303 kg/ha. Por eso un año de buen clima con año alto
+año de meseta es 3.792,57 × 0,8667 × 0,791020 = 2.600 kg/ha, igual que el
+Excel (0,8667 × 3.000); el Monte Carlo de 10.000 simulaciones da 2.596,5
+(EE 2,6). El rendimiento sin penalidades climáticas es
+3.792,57 × 0,8667 = 3.287 kg/ha. Por eso un año de buen clima con año alto
 de vecería supera los 3.000 (ver el problema abierto sobre la amplitud de
 la vecería).
 
 ## Problemas abiertos
 
-### La descarga climática no fija ERA5-Land (`models` sin especificar)
+### ~~La descarga climática no fija ERA5-Land (`models` sin especificar)~~ — resuelto el 2026-11-09 (rama `clima-era5`, ver "Serie climática homogénea")
 
 `src/data/climate_fetcher.py` consulta la API histórica de Open-Meteo sin
 el parámetro `models`, así que usa el default "Best Match". Los comentarios
@@ -1287,6 +1390,29 @@ verano. Para cada una: media, desvío y tendencia (Mann-Kendall modificado
 y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
 usuaria y recién después tocar constantes o datos. Hasta entonces no se
 toca nada.
+
+### Precipitación de ERA5 sesgada al alza en Jocolí (~656 mm/año contra ~150-200 reales)
+
+La precipitación de ERA5 (0,25°) en el punto de Jocolí da 655,7 mm/año de
+media en 1990-2024 (725,8 hasta 2016), unas 3-4 veces la lluvia real de
+Lavalle. Es un sesgo conocido de los reanálisis gruesos al pie de los Andes.
+Con esos niveles, el De Martonne medio da ~25 (semihúmedo) y el déficit
+hídrico ~772 mm, contra la síntesis del notebook 00, que habla de un sitio
+"árido a hiperárido" con lluvia que "no supera los 150 mm".
+
+No afecta al motor (solo usa temperatura), pero sí al Capítulo 2. Opciones:
+
+1. Reportar solo tendencias de precipitación, déficit y De Martonne (la
+   serie es homogénea), no niveles.
+2. Corregir el sesgo con una estación local (p. ej. INTA, SMN Mendoza Aero)
+   por escalamiento mensual.
+3. Usar un producto de precipitación más adecuado para zonas áridas
+   (CHIRPS, MSWEP).
+
+A decidir con el director. La síntesis del notebook 00 (celda "Síntesis e
+interpretación agronómica") también afirma que la tmax de verano está "en el
+rango óptimo 35-38 °C" la mayor parte del período, y la media es 29,4 °C:
+revisar ese párrafo.
 
 ### Valores de referencia de las combinaciones fiscales fijados en el test
 

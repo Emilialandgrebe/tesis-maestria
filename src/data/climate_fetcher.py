@@ -1,4 +1,19 @@
-"""Descarga y cacheo de datos climáticos históricos desde Open-Meteo Archive API."""
+"""Descarga y cacheo de datos climáticos históricos desde Open-Meteo Archive API.
+
+Serie homogénea (default desde 2026-11-09, rama `clima-era5`):
+
+- temperatura (`temperature_2m`): ERA5-Land (`models=era5_land`, 0,1°).
+- precipitación y ET0 (`precipitation`, `et0_fao_evapotranspiration`):
+  ERA5 (`models=era5`, 0,25°). La API no devuelve esas dos variables con
+  `models=era5_land` (vienen vacías).
+
+El default de la API ("Best Match") NO es homogéneo: hasta 2016 coincide con
+ERA5-Land/ERA5, pero desde 2017 usa ECMWF IFS 9 km, con un salto de nivel
+(+2 °C en la tmax de verano; ver notas/PLAN_TESIS.md). Open-Meteo recomienda
+usar solo ERA5 o ERA5-Land para tendencias de varias décadas. La serie Best
+Match se conserva en `clima_jocoli.parquet` solo como registro
+(`fuente="best_match"`).
+"""
 
 import time
 from pathlib import Path
@@ -15,7 +30,22 @@ TIMEZONE = "America/Argentina/Mendoza"
 API_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
-PARQUET_PATH = RAW_DIR / "clima_jocoli.parquet"
+# Serie Best Match (default de la API, sin `models`), descargada en 2026-07.
+# Solo registro: no la usa el motor ni el notebook 00.
+PARQUET_BEST_MATCH = RAW_DIR / "clima_jocoli.parquet"
+PARQUET_POR_MODELO = {
+    "era5_land": RAW_DIR / "clima_jocoli_era5_land.parquet",
+    "era5": RAW_DIR / "clima_jocoli_era5.parquet",
+}
+# Variable -> modelo del que se toma en la serie homogénea
+FUENTE_POR_VARIABLE = {
+    "temperature_2m": "era5_land",
+    "precipitation": "era5",
+    "et0_fao_evapotranspiration": "era5",
+}
+
+# Compatibilidad: nombre anterior de la ruta de la serie Best Match.
+PARQUET_PATH = PARQUET_BEST_MATCH
 
 
 def fetch_climate_data(
@@ -23,59 +53,72 @@ def fetch_climate_data(
     lon: float = LON,
     start_date: str = START_DATE,
     end_date: str = END_DATE,
-    variables: list[str] = HOURLY_VARS,
     timezone: str = TIMEZONE,
     max_reintentos: int = 3,
+    fuente: str = "homogenea",
 ) -> pd.DataFrame:
     """
-    Descarga datos climáticos horarios históricos desde Open-Meteo Archive API.
-
-    Si el archivo parquet local ya existe, lo carga directamente sin llamar a la API.
-    Si no existe, descarga los datos, los guarda en parquet y los retorna.
+    Datos climáticos horarios históricos de Jocolí (1990-2024).
 
     Parámetros
     ----------
-    lat : float
-        Latitud de la ubicación (por defecto: Jocolí, Mendoza).
-    lon : float
-        Longitud de la ubicación.
-    start_date : str
-        Fecha de inicio en formato 'YYYY-MM-DD'.
-    end_date : str
-        Fecha de fin en formato 'YYYY-MM-DD'.
-    variables : list[str]
-        Variables horarias a solicitar a la API.
-    timezone : str
-        Zona horaria para el índice datetime del resultado.
-    max_reintentos : int
-        Número máximo de reintentos ante errores de conexión.
+    fuente : {"homogenea", "era5_land", "era5", "best_match"}
+        "homogenea" (default): temperatura de ERA5-Land y precipitación/ET0
+        de ERA5 (ver `FUENTE_POR_VARIABLE`). "era5_land" / "era5": la serie
+        completa de ese modelo (ERA5-Land viene sin precipitación ni ET0).
+        "best_match": la serie histórica guardada (no homogénea, solo como
+        registro).
+
+    Cada modelo se cachea en su propio parquet de `data/raw/`; si existe, se
+    lee sin llamar a la API.
 
     Retorna
     -------
-    pd.DataFrame
-        DataFrame con índice DatetimeIndex y una columna por variable climática.
+    pd.DataFrame con índice DatetimeIndex horario y columnas
+    temperature_2m, precipitation, et0_fao_evapotranspiration.
     """
-    if PARQUET_PATH.exists():
-        print(f"Cargando datos locales desde {PARQUET_PATH}")
-        return pd.read_parquet(PARQUET_PATH)
+    if fuente == "best_match":
+        print(f"Cargando datos locales desde {PARQUET_BEST_MATCH}")
+        return pd.read_parquet(PARQUET_BEST_MATCH)
+    if fuente in PARQUET_POR_MODELO:
+        return _serie_modelo(fuente, lat, lon, start_date, end_date, timezone, max_reintentos)
+    if fuente != "homogenea":
+        raise ValueError(f"fuente desconocida: {fuente!r}")
 
-    print(f"Descargando datos desde Open-Meteo ({start_date} a {end_date})...")
+    por_modelo = {
+        m: _serie_modelo(m, lat, lon, start_date, end_date, timezone, max_reintentos)
+        for m in sorted(set(FUENTE_POR_VARIABLE.values()))
+    }
+    df = pd.DataFrame({v: por_modelo[m][v] for v, m in FUENTE_POR_VARIABLE.items()})
+    if df.isna().any().any():
+        raise ValueError(f"Serie homogénea con datos faltantes: {df.isna().sum().to_dict()}")
+    return df
+
+
+def _serie_modelo(
+    modelo: str, lat, lon, start_date, end_date, timezone, max_reintentos
+) -> pd.DataFrame:
+    ruta = PARQUET_POR_MODELO[modelo]
+    if ruta.exists():
+        print(f"Cargando datos locales desde {ruta}")
+        return pd.read_parquet(ruta)
+
+    print(f"Descargando {modelo} desde Open-Meteo ({start_date} a {end_date})...")
     params = {
         "latitude": lat,
         "longitude": lon,
         "start_date": start_date,
         "end_date": end_date,
-        "hourly": ",".join(variables),
+        "hourly": ",".join(HOURLY_VARS),
         "timezone": timezone,
+        "models": modelo,
     }
-
     respuesta = _get_con_reintentos(API_URL, params, max_reintentos)
-    df = _parsear_respuesta(respuesta)
+    df = _parsear_respuesta(respuesta, sufijo=f"_{modelo}")
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(PARQUET_PATH)
-    print(f"Datos guardados en {PARQUET_PATH} ({len(df):,} filas)")
-
+    df.to_parquet(ruta)
+    print(f"Datos guardados en {ruta} ({len(df):,} filas)")
     return df
 
 
@@ -85,7 +128,7 @@ def _get_con_reintentos(
     """Ejecuta un GET con reintentos exponenciales ante errores de conexión."""
     for intento in range(1, max_reintentos + 1):
         try:
-            resp = requests.get(url, params=params, timeout=60)
+            resp = requests.get(url, params=params, timeout=300)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
@@ -98,8 +141,10 @@ def _get_con_reintentos(
             time.sleep(espera)
 
 
-def _parsear_respuesta(datos: dict) -> pd.DataFrame:
-    """Convierte la respuesta JSON de Open-Meteo en un DataFrame indexado por tiempo."""
+def _parsear_respuesta(datos: dict, sufijo: str = "") -> pd.DataFrame:
+    """Convierte la respuesta JSON de Open-Meteo en un DataFrame indexado por
+    tiempo. Con `models=...` la API puede agregar el sufijo del modelo a cada
+    variable; se quita."""
     hourly = datos.get("hourly", {})
     if not hourly or "time" not in hourly:
         raise ValueError("La respuesta de Open-Meteo no contiene datos horarios.")
@@ -108,4 +153,6 @@ def _parsear_respuesta(datos: dict) -> pd.DataFrame:
     df["time"] = pd.to_datetime(df["time"])
     df = df.set_index("time")
     df.index.name = "datetime"
+    if sufijo:
+        df.columns = [c.removesuffix(sufijo) for c in df.columns]
     return df

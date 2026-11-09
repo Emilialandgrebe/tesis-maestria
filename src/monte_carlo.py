@@ -36,13 +36,16 @@ HECTAREAS = HECTAREAS_REFERENCIA  # 120 ha, Supuestos!B11 del Excel v2
 # `_media_veceria()`), no un valor que se observe todos los años.
 RENDIMIENTO_VALIDADO_KG_HA = _MODELO.supuestos["rendimiento_plena_kg_ha"]
 
-# Calibración climática y biológica real (Módulo 0, ERA5-Land / Open-Meteo,
-# Jocolí 1990-2024). Se usan tanto como defaults de ParametrosMC como para
-# derivar RENDIMIENTO_IDEAL_KG_HA más abajo — una sola fuente de verdad.
-_HORAS_FRIO_MEDIA = 984.3
-_HORAS_FRIO_STD = 212.7
-_CALOR_VERANO_MEDIA = 29.87
-_CALOR_VERANO_STD = 1.98
+# Calibración climática y biológica real (Módulo 0, Jocolí 1990-2024,
+# temperatura ERA5-Land de Open-Meteo con `models=era5_land`; recalibrado el
+# 2026-11-09 desde la serie "Best Match", que desde 2017 mezcla ECMWF IFS y
+# no es homogénea, ver src/data/climate_fetcher.py y notas/PLAN_TESIS.md).
+# Se usan tanto como defaults de ParametrosMC como para derivar
+# RENDIMIENTO_IDEAL_KG_HA más abajo — una sola fuente de verdad.
+_HORAS_FRIO_MEDIA = 998.7
+_HORAS_FRIO_STD = 220.4
+_CALOR_VERANO_MEDIA = 29.42
+_CALOR_VERANO_STD = 1.54
 _P_BAJO_SI_ALTO = 0.65   # P(año bajo | año previo fue alto), vecería
 _P_ALTO_SI_BAJO = 0.80   # P(año alto | año previo fue bajo), vecería
 _VECERIA_FACTOR_MIN = 0.60
@@ -52,13 +55,14 @@ _PLANTAS_BETA = 20.0
 
 # Correlación empírica horas_frio vs. tmax_media_verano_c (Módulo 0,
 # data/processed/features_climaticas.parquet, 35 años ERA5-Land Jocolí
-# 1990-2024): Pearson r=-0.2894, p=0.0918. NO significativa al 5% (n=35 le
-# da ~39% de potencia para detectar un r de esta magnitud, y el IC95% de
-# Fisher es aprox. [-0.57, +0.05] -- incluye el cero con margen). Por eso
+# 1990-2024): Pearson r=-0.2767, p=0.108 (con Best Match era r=-0.2894,
+# p=0.092). NO significativa al 5% (n=35 da poca potencia para detectar un
+# r de esta magnitud, y el IC95% de Fisher es aprox. [-0.56, +0.06] --
+# incluye el cero con margen). Por eso
 # NO se modela por defecto (`ParametrosMC.correlacionar_frio_calor=False`);
 # ver notas/PLAN_TESIS.md, 2026-08-26, para la fundamentación completa y el
 # chequeo de robustez contra el ruido de muestreo del propio Monte Carlo.
-CORR_HORAS_FRIO_TMAX_VERANO = -0.2894
+CORR_HORAS_FRIO_TMAX_VERANO = -0.2767
 
 # Fracción del rendimiento pleno por año del proyecto (1-20).
 #
@@ -117,7 +121,7 @@ def _media_factor_frio(horas: np.ndarray) -> np.ndarray:
     `_muestrear_beta_por_media`).
 
     El punto de referencia (factor = 1.00) es la MEDIA HISTÓRICA REAL del
-    sitio (horas_frio_media = 984.3 hs, calibrada con datos ERA5-Land de
+    sitio (horas_frio_media = 998.7 hs, calibrada con datos ERA5-Land de
     Jocolí 1990-2024), no el óptimo agronómico teórico de 1.000 hs. Si se
     centrara en el óptimo teórico, el clima típico del sitio (que está por
     debajo de ese óptimo) se penalizaría dos veces: una vez implícitamente,
@@ -127,13 +131,13 @@ def _media_factor_frio(horas: np.ndarray) -> np.ndarray:
 
     Umbrales (mismo ancho de zona que la versión centrada en el óptimo teórico,
     solo desplazados a la media real):
-    - >= 984.3 hs : año típico o mejor, sin penalidad (factor = 1.00)
-    - 784.3–984.3 hs: penalidad lineal moderada (0.70–1.00)
-    - < 784.3 hs  : año con déficit severo, penalidad fuerte (0.40–0.70)
+    - >= 998.7 hs : año típico o mejor, sin penalidad (factor = 1.00)
+    - 798.7–998.7 hs: penalidad lineal moderada (0.70–1.00)
+    - < 798.7 hs  : año con déficit severo, penalidad fuerte (0.40–0.70)
     """
     CENTRO = _HORAS_FRIO_MEDIA
     ANCHO = 200.0  # mismo ancho de zona moderada que la función original
-    UMBRAL_SEVERO = CENTRO - ANCHO  # 784.3
+    UMBRAL_SEVERO = CENTRO - ANCHO  # 798.7
     return np.clip(
         np.where(
             horas >= CENTRO,
@@ -156,7 +160,7 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
     después con `_muestrear_beta_por_media`).
 
     El punto de referencia (factor = 1.00) es la MEDIA HISTÓRICA REAL del
-    sitio (calor_verano_media = 29.87 °C, calibrada con datos ERA5-Land de
+    sitio (calor_verano_media = 29.42 °C, calibrada con datos ERA5-Land de
     Jocolí 1990-2024), no el rango óptimo agronómico teórico (35-38 °C,
     Crane y Takeda, 1979; Ferguson, 2006). Mismo razonamiento que en
     `_media_factor_frio`: centrar en el óptimo teórico penalizaría dos veces
@@ -171,13 +175,13 @@ def _media_factor_calor(tmax_verano: np.ndarray) -> np.ndarray:
 
     Umbrales (mismo ancho de zona que la versión centrada en el óptimo
     teórico, solo desplazados a la media real):
-    - >= 29.87 °C  : año típico o mejor, sin penalidad (factor = 1.00)
-    - 22.57–29.87 °C: penalidad lineal moderada (0.70–1.00)
-    - < 22.57 °C   : año con déficit severo, penalidad fuerte (0.40–0.70)
+    - >= 29.42 °C  : año típico o mejor, sin penalidad (factor = 1.00)
+    - 22.12–29.42 °C: penalidad lineal moderada (0.70–1.00)
+    - < 22.12 °C   : año con déficit severo, penalidad fuerte (0.40–0.70)
     """
     CENTRO = _CALOR_VERANO_MEDIA
     ANCHO = 7.3  # mismo ancho de zona moderada que la función original (35 - 27.7)
-    UMBRAL_SEVERO = CENTRO - ANCHO  # 22.57
+    UMBRAL_SEVERO = CENTRO - ANCHO  # 22.12
     return np.clip(
         np.where(
             tmax_verano >= CENTRO,
@@ -363,7 +367,7 @@ class ParametrosMC:
     horas_frio_std: float = _HORAS_FRIO_STD
 
     # Calor estival (tmax media diaria, enero-febrero) — calibrado con datos
-    # reales ERA5-Land / Open-Meteo 1990-2024 (Módulo 0, calcular_calor_verano)
+    # reales ERA5-Land (models=era5_land) 1990-2024 (Módulo 0, calcular_calor_verano)
     calor_verano_media: float = _CALOR_VERANO_MEDIA
     calor_verano_std: float = _CALOR_VERANO_STD
 
