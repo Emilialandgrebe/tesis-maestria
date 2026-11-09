@@ -14,7 +14,9 @@ El sidebar incluye los dos interruptores fiscales del Excel: traslado de
 quebrantos (encendido por defecto, caso base) y activación del OPEX
 pre-productivo como costo de implantación (apagado por defecto,
 sensibilidad). Aplican a todas las pestañas salvo Sobol, que está
-pre-calculado con el caso fiscal anterior (sin quebrantos ni activación).
+pre-calculado con el caso fiscal y la calibración climática anteriores
+(sin quebrantos, clima Best Match). También incluye el escenario de estrés
+climático (tendencia de frío y calor de ERA5-Land, sin renormalizar).
 
 Ejecutar:  streamlit run app.py
 """
@@ -45,6 +47,12 @@ ESCENARIOS = ["pesimista", "base", "optimista"]
 COLOR_ESCENARIO = {"pesimista": "#C44E52", "base": "#4C72B0", "optimista": "#55A868"}
 RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices.parquet"
 _NOMBRE_PRECIO = {"ar1": "AR(1) en niveles", "ar1_retornos": "AR(1) retornos (estrés)", "triangular": "triangular"}
+# Etiqueta del sidebar -> variante de ParametrosMC (None = sin estrés).
+_ESTRES_CLIMATICO = {
+    "Sin estrés": None,
+    "Tendencia de Sen (puntual)": "puntual",
+    "Extremo del IC95%": "extremo",
+}
 _NOMBRE_PARAMETRO = {
     "tasa_descuento": "Tasa de descuento real",
     "precio_nivel_mult": "Nivel del precio (× trayectoria)",
@@ -116,6 +124,7 @@ def simular(
     semilla: int,
     quebrantos: bool = True,
     activar_opex_pre: bool = False,
+    estres_climatico: str | None = None,
 ) -> dict:
     """Corre `run_monte_carlo()` una vez y devuelve lo que necesita la UI.
 
@@ -143,6 +152,8 @@ def simular(
         # reversión): el mismo generador "ar1" del motor con otros parámetros.
         modo_precio="ar1" if modo_precio == "ar1_retornos" else modo_precio,
         semilla=semilla,
+        estres_climatico=estres_climatico is not None,
+        estres_variante=estres_climatico or "puntual",
     )
     costos = ParametrosCostos(
         hectareas=hectareas, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
@@ -257,6 +268,21 @@ with st.sidebar:
         help="Cópula gaussiana frío↔calor (r≈-0,29, no significativa al 5%). Default: desactivado.",
     )
 
+    estres_etiqueta = st.radio(
+        "Estrés climático", list(_ESTRES_CLIMATICO), index=0,
+        help=(
+            "Desplaza cada año las medias de horas de frío y tmax de verano "
+            "según la tendencia de Sen de ERA5-Land 1990-2024, extrapolada "
+            "desde 2024 (año 1 del proyecto = 2027), sin renormalizar el "
+            "rendimiento ideal. Puntual: frío -2,65 h/año, calor +0,088 °C/año. "
+            "Extremo del IC95%: frío -11,92 h/año, calor +0,131 °C/año. La "
+            "tendencia de frío no es significativa (p = 0,23): se usa solo "
+            "como estrés. En el motor el calor solo penaliza veranos más "
+            "frescos que la media, así que la tendencia de calor sube el "
+            "rendimiento; el efecto negativo viene del frío."
+        ),
+    )
+
     quebrantos = st.checkbox(
         "Traslado de quebrantos (5 años)", value=True,
         help=(
@@ -295,6 +321,7 @@ _args_comunes = dict(
     semilla=SEMILLA,
     quebrantos=bool(quebrantos),
     activar_opex_pre=bool(activar_opex_pre),
+    estres_climatico=_ESTRES_CLIMATICO[estres_etiqueta],
 )
 
 with st.spinner("Corriendo Monte Carlo…"):
@@ -462,14 +489,14 @@ with tab_sobol:
                 "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
                 "vivo, así que no reflejan el modelo seleccionado."
             )
-        if quebrantos or activar_opex_pre:
-            st.info(
-                "Estos índices se pre-calcularon con el caso fiscal anterior "
-                "(sin traslado de quebrantos ni activación del OPEX "
-                "pre-productivo) y no reflejan los interruptores fiscales del "
-                "sidebar. Se regeneran una sola vez al final, después de "
-                "ERA5-Land y de la inferencia bayesiana (ver notas/PLAN_TESIS.md)."
-            )
+        st.info(
+            "Estos índices se pre-calcularon con el caso fiscal anterior "
+            "(sin traslado de quebrantos) y la calibración climática "
+            "anterior (serie Best Match), sin estrés climático: no reflejan "
+            "las opciones fiscales ni climáticas del sidebar. Se regeneran "
+            "una sola vez al final, después de ERA5-Land y de la inferencia "
+            "bayesiana (ver notas/PLAN_TESIS.md)."
+        )
         etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
         fig, ax = plt.subplots(figsize=(8, 3.8))
         ax.barh(
@@ -512,6 +539,7 @@ with tab_cmp:
         f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
         f"{'con' if quebrantos else 'sin'} traslado de quebrantos, "
         f"{'con' if activar_opex_pre else 'sin'} activación del OPEX pre-productivo, "
+        f"estrés climático: {estres_etiqueta}, "
         f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):

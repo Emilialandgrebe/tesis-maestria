@@ -46,8 +46,12 @@ Tercer argumento, especificación del precio:
 Las dos planas miden cuánto del resultado depende de la suba real de la
 trayectoria.
 
+Cuarto argumento opcional, escenario de estrés climático
+(`ParametrosMC.estres_climatico`): `puntual` o `extremo` (pendiente de Sen
+de ERA5-Land o extremo de su IC95%). Sin él, clima sin tendencia.
+
 Uso:
-    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [niveles|retornos|niveles_plano|niveles_plano_8]
+    python scripts/descomponer_varianza.py [escenario] [n_simulaciones] [niveles|retornos|niveles_plano|niveles_plano_8] [puntual|extremo]
 """
 
 from __future__ import annotations
@@ -116,10 +120,15 @@ def descomponer(
     n_simulaciones: int = 10_000,
     semilla: int = 42,
     especificacion: str = "niveles",
+    estres_variante: str | None = None,
 ):
     """Retorna (corridas, fracciones): una fila por corrida con media, desvío
     y P(VAN<0), y una fila por fuente con las dos fracciones de varianza."""
-    params = ParametrosMC(n_simulaciones=n_simulaciones, escenario=escenario, semilla=semilla)
+    params = ParametrosMC(
+        n_simulaciones=n_simulaciones, escenario=escenario, semilla=semilla,
+        estres_climatico=estres_variante is not None,
+        estres_variante=estres_variante or "puntual",
+    )
     precio_params = _precio(escenario, especificacion, params.n_años)
     todas = set(FUENTES)
 
@@ -173,10 +182,15 @@ if __name__ == "__main__":
     escenario = sys.argv[1] if len(sys.argv) > 1 else "base"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 10_000
     especificacion = sys.argv[3] if len(sys.argv) > 3 else "niveles"
+    estres = sys.argv[4] if len(sys.argv) > 4 else None
 
-    corridas, fracciones = descomponer(escenario, n, especificacion=especificacion)
+    corridas, fracciones = descomponer(
+        escenario, n, especificacion=especificacion, estres_variante=estres
+    )
 
     sufijo = escenario if especificacion == "niveles" else f"{escenario}_precio_{especificacion}"
+    if estres:
+        sufijo += f"_estres_{estres}"
     SALIDA.mkdir(exist_ok=True)
     corridas.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_corridas.csv", index=False)
     fracciones.to_csv(SALIDA / f"descomposicion_varianza_{sufijo}_fracciones.csv", index=False)

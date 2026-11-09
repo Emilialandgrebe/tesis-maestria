@@ -878,6 +878,11 @@ Lectura:
   dispersión SUBE la probabilidad de pérdida (sin precio: 67,5%; todo
   fijo: 100%). Por eso la descomposición se hace sobre la varianza y
   P(VAN<0) se reporta solo como descripción de cada corrida.
+- **El ~5% del clima es en parte por construcción**: la normalización del
+  rendimiento ideal hace que el clima no pueda mover la media, solo la
+  dispersión. Su efecto de nivel se evalúa con el escenario de estrés
+  climático (ver esa sección): con la tendencia extrema la fracción solo
+  sube a 8%, pero el VAN medio cae ~487k.
 - **Control**: la corrida "todo fijo" da −209.911, que es el VAN
   determinístico del Excel (−240.830) más el efecto del momento de la
   vecería (+30.919) ya medido en la sección anterior. Cierra exacto.
@@ -1270,6 +1275,104 @@ De Martonne en ~25 (semihúmedo), incompatible con la síntesis del notebook
 son homogéneas, pero los niveles de lluvia, déficit y De Martonne no son
 confiables. El motor no usa precipitación.
 
+### Escenario de estrés climático: tendencia de ERA5-Land sin renormalizar (rama `clima-era5`, 2026-11-09)
+
+**Por qué.** En el caso base el clima explica ~5% de la varianza del VAN
+(descomposición por fuente). **Ese 5% es en parte por construcción:** el
+rendimiento ideal se normaliza (`RENDIMIENTO_IDEAL_KG_HA = 3.000 /
+E[factores]`) para que, en el clima medio histórico, el rendimiento esperado
+sea el del Excel. El clima, entonces, solo agrega dispersión alrededor de
+una media que no puede mover. Si el clima cambia de nivel (tendencia), esa
+normalización lo esconde. El director pidió no armar un submodelo
+climático, sino evaluar ese efecto con un **escenario de estrés**.
+
+**Qué hace** (`ParametrosMC(estres_climatico=True,
+estres_variante="puntual" | "extremo")`, `medias_climaticas()` en
+`src/monte_carlo.py`):
+
+- Las medias de horas de frío y tmax de verano se desplazan cada año del
+  proyecto según la pendiente de Sen de ERA5-Land 1990-2024, extrapolada
+  desde 2024: media(t) = media histórica + pendiente × (2026 + t − 2024).
+  El año 0 del proyecto se toma como 2026 (el de los USD constantes; el
+  Excel no fija un año de inicio), así que el año 1 es 2027 y el año 20 es
+  2046. El desvío no cambia.
+- **No se renormaliza** el rendimiento ideal: queda la constante del caso
+  base (3.792,57 kg/ha), para que la tendencia sí baje (o suba) el
+  rendimiento medio.
+- Con "clima" en `fuentes_fijas`, el factor fijo es el esperado en la media
+  de cada año.
+
+| Variante | Frío (h/año) | Calor (°C/año) | Frío año 1 → 20 | Calor año 1 → 20 |
+|---|---|---|---|---|
+| Puntual (Sen) | −2,65 | +0,088 | 990,8 → 940,4 h | 29,68 → 31,36 °C |
+| Extremo del IC95% | −11,92 | +0,131 | 962,9 → 736,5 h | 29,81 → 32,30 °C |
+
+La tendencia de frío **no es significativa** (MK modificado p = 0,225, IC95%
+[−11,92; +3,82]): se usa solo como estrés. La de calor sí (p = 0,001).
+
+**Ojo con el signo del calor.** En el motor el factor de calor solo
+penaliza veranos **más frescos** que la media histórica (no hay penalidad
+por exceso de calor, ver "Interpretación del rendimiento de plena
+producción"). Una tendencia de calentamiento lo lleva a 1 y **sube** el
+rendimiento. El extremo +0,131 °C/año es el borde superior del IC95%, que
+en el motor es el *favorable*. El efecto negativo del escenario viene
+entero del frío. Por separado (10.000 simulaciones, caso base):
+
+| Solo esa tendencia | Meseta (kg/ha) | VAN medio | P(VAN<0) |
+|---|---|---|---|
+| Frío puntual | 2.517 | −163.694 | 59,9% |
+| Calor puntual | 2.650 | +41.311 | 52,3% |
+| Frío extremo | 2.202 | −623.358 | 76,0% |
+| Calor extremo | 2.659 | +61.309 | 51,6% |
+
+Si se quiere un estrés de calor que reste, hace falta una penalidad por
+exceso de calor (> 38-40 °C en la apertura de cáscara), que hoy el motor no
+tiene: queda como problema abierto.
+
+**Resultados** (caso base con quebrantos, escenario de precio base, AR(1)
+en niveles, 10.000 simulaciones, semilla 42). Meseta = rendimiento medio de
+los años 12-20; fracción de varianza del clima de
+`scripts/descomponer_varianza.py base 10000 niveles [puntual|extremo]`
+(simulaciones antitéticas, IC95% bootstrap):
+
+| | Sin estrés | Puntual | Extremo IC95% |
+|---|---|---|---|
+| Meseta (kg/ha), EE ≈ 2,6 | 2.596,5 | 2.567,6 | 2.254,3 |
+| Meseta año 12 → año 20 | 2.590 → 2.590 | 2.574 → 2.547 | 2.334 → 2.159 |
+| VAN medio (EE ≈ 10.600) | −47.614 | −75.948 | −534.225 |
+| P(VAN<0) (EE ≈ 0,5 pp) | 55,3% | 56,9% | 73,6% |
+| Clima: fracción al quitar (IC95%) | 4,6% (3,5–5,8) | 5,1% (3,8–6,3) | 7,9% (6,4–9,4) |
+| Clima: fracción sola | 5,1% | 5,6% | 8,0% |
+
+Sin estrés, el VAN medio da −47.614 contra −44.421 antes de la
+recalibración climática: la diferencia (~3.200) está dentro del error de
+muestreo y es efecto de la calibración ERA5-Land (rendimiento ideal más
+bajo, distinto consumo de `rng` por el muestreo por rechazo de la Beta).
+
+Lectura:
+
+- **La tendencia puntual casi no mueve el resultado** (−1,1% en la meseta,
+  −28k en el VAN, +1,6 pp en P(VAN<0)): el frío baja poco y el calor
+  compensa en parte.
+- **El extremo sí es un riesgo serio:** la meseta cae 13% (−17% al año 20),
+  el VAN medio cae ~487k y P(VAN<0) sube a 74%. Pero se apoya en una
+  tendencia de frío **no significativa**: es un escenario de estrés, no
+  una proyección.
+- **La fracción de varianza del clima casi no cambia** (5% → 8%): el estrés
+  mueve sobre todo la **media**, no la dispersión. Por eso la
+  descomposición de varianza, por sí sola, subestima el riesgo climático, y
+  el efecto del clima se evalúa con este escenario y no con el 5%.
+
+Detalle técnico: en `run_monte_carlo` el estrés cambia las realizaciones de
+precio (`rng.beta` muestrea por rechazo y consume una cantidad de números
+que depende de las medias), así que la comparación sin estrés / con estrés
+no está pareada simulación a simulación. En la versión antitética sí lo
+está (todo por PPF), y la descomposición de varianza usa esa.
+
+App: radio "Estrés climático" en el sidebar (sin estrés / puntual /
+extremo). Sobol y el dataset de ML no se regeneran: se hace una sola vez al
+final, después de ERA5-Land y del bayesiano.
+
 ### Interpretación del rendimiento de plena producción (verificado contra el código, 2026-11-05; recalibrado con ERA5-Land el 2026-11-09)
 
 Los 3.000 kg/ha del Excel (Supuestos!B20) son, en el motor, el rendimiento
@@ -1390,6 +1493,16 @@ verano. Para cada una: media, desvío y tendencia (Mann-Kendall modificado
 y pendiente de Sen, como en el Módulo 0). Presentarle la comparación a la
 usuaria y recién después tocar constantes o datos. Hasta entonces no se
 toca nada.
+
+### El motor no penaliza el exceso de calor
+
+El factor de calor vale 1 en cualquier verano igual o más cálido que la
+media histórica (29,42 °C), así que la tendencia de calentamiento sube el
+rendimiento en el escenario de estrés climático. La bibliografía del propio
+notebook 00 marca daño por encima de 38-40 °C (frutos vacíos, menor calibre,
+menor apertura). Para que un estrés de calor reste, haría falta una rama
+descendente de la función por encima de un umbral, calibrada con días > 38
+°C o rachas. A decidir con el director; no se toca sin pedido.
 
 ### Precipitación de ERA5 sesgada al alza en Jocolí (~656 mm/año contra ~150-200 reales)
 

@@ -64,6 +64,29 @@ _PLANTAS_BETA = 20.0
 # chequeo de robustez contra el ruido de muestreo del propio Monte Carlo.
 CORR_HORAS_FRIO_TMAX_VERANO = -0.2767
 
+# Escenario de estrés climático (pedido del director, 2026-11-09): en vez de
+# un submodelo de clima, las medias de horas de frío y tmax de verano se
+# desplazan cada año del proyecto según la pendiente de Sen de la serie
+# ERA5-Land 1990-2024 (notebook 00, Mann-Kendall modificado), extrapolada
+# desde el último año de la serie. El desvío no cambia y el rendimiento
+# ideal NO se renormaliza (queda la constante del caso base), para que la
+# tendencia sí mueva el rendimiento medio.
+#
+# Variantes: pendiente puntual de Sen y extremo de su IC95%. La tendencia de
+# frío NO es significativa (MK modificado p = 0,225, IC95% [-11,92; +3,82]
+# h/año): se usa solo como estrés. La de calor sí lo es (p = 0,001).
+# Ojo: en el motor el calor solo penaliza veranos MÁS FRESCOS que la media
+# (no hay penalidad por exceso de calor), así que la tendencia de calor
+# sube el rendimiento; el extremo +0,131 °C/año es el más alto del IC95%.
+PENDIENTES_ESTRES_CLIMATICO = {
+    "puntual": {"horas_frio": -2.65, "calor_verano": 0.088},
+    "extremo": {"horas_frio": -11.92, "calor_verano": 0.131},
+}
+ANIO_FIN_SERIE_CLIMATICA = 2024
+# Año calendario del año 0 del proyecto (CAPEX). El Excel no fija un año de
+# inicio; se toma 2026, el de los USD constantes.
+ANIO_CERO_PROYECTO = 2026
+
 # Fracción del rendimiento pleno por año del proyecto (1-20).
 #
 # CURVA_EXCEL es la curva de Supuestos!D54:X54 tal cual. Ya trae la vecería
@@ -388,6 +411,15 @@ class ParametrosMC:
     # robustez (correr True vs. False y comparar), no como calibración.
     correlacionar_frio_calor: bool = False
 
+    # Escenario de estrés climático (ver PENDIENTES_ESTRES_CLIMATICO): las
+    # medias de frío y calor se desplazan año a año según la tendencia de
+    # Sen extrapolada desde 2024, sin renormalizar el rendimiento ideal.
+    # `estres_variante`: "puntual" (pendiente de Sen) o "extremo" (extremo
+    # del IC95%). Default apagado.
+    estres_climatico: bool = False
+    estres_variante: Literal["puntual", "extremo"] = "puntual"
+    anio_cero_proyecto: int = ANIO_CERO_PROYECTO
+
     # Vecería: cadena de Markov sobre estado alto/bajo
     p_bajo_si_alto: float = _P_BAJO_SI_ALTO
     p_alto_si_bajo: float = _P_ALTO_SI_BAJO
@@ -519,6 +551,32 @@ def _validar_fuentes_fijas(params: ParametrosMC) -> None:
         )
 
 
+def medias_climaticas(params: ParametrosMC) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Medias de horas de frío y tmax de verano por año del proyecto, forma
+    (1, n_años). Sin estrés son constantes (la calibración histórica). Con
+    `params.estres_climatico`, la media del año t (año calendario
+    `anio_cero_proyecto + t`) se desplaza
+    pendiente * (anio_cero_proyecto + t - ANIO_FIN_SERIE_CLIMATICA).
+    """
+    T = params.n_años
+    frio = np.full((1, T), float(params.horas_frio_media))
+    calor = np.full((1, T), float(params.calor_verano_media))
+    if params.estres_climatico:
+        if params.estres_variante not in PENDIENTES_ESTRES_CLIMATICO:
+            raise ValueError(
+                f"estres_variante debe ser uno de {sorted(PENDIENTES_ESTRES_CLIMATICO)}; "
+                f"recibido {params.estres_variante!r}"
+            )
+        pend = PENDIENTES_ESTRES_CLIMATICO[params.estres_variante]
+        años_desde_serie = (
+            params.anio_cero_proyecto + np.arange(1, T + 1) - ANIO_FIN_SERIE_CLIMATICA
+        ).reshape(1, T)
+        frio = frio + pend["horas_frio"] * años_desde_serie
+        calor = calor + pend["calor_verano"] * años_desde_serie
+    return frio, calor
+
+
 def _combinar_factores(
     params: ParametrosMC,
     curva_base: np.ndarray,
@@ -533,12 +591,13 @@ def _combinar_factores(
     if "veceria" in fijas:
         factor_veceria = np.ones_like(factor_veceria)
     if "clima" in fijas:
-        factor_frio = np.full_like(
-            factor_frio, _esperanza_factor_frio(params.horas_frio_media, params.horas_frio_std)
-        )
-        factor_calor = np.full_like(
-            factor_calor, _esperanza_factor_calor(params.calor_verano_media, params.calor_verano_std)
-        )
+        # Valor esperado de cada factor en su media de ese año (con estrés
+        # climático la media se desplaza año a año).
+        media_frio, media_calor = medias_climaticas(params)
+        e_frio = np.array([_esperanza_factor_frio(m, params.horas_frio_std) for m in media_frio[0]])
+        e_calor = np.array([_esperanza_factor_calor(m, params.calor_verano_std) for m in media_calor[0]])
+        factor_frio = np.broadcast_to(e_frio.reshape(1, -1), factor_frio.shape).copy()
+        factor_calor = np.broadcast_to(e_calor.reshape(1, -1), factor_calor.shape).copy()
     if "plantas" in fijas:
         supervivencia = np.full_like(
             supervivencia, 1.0 - params.plantas_alpha / (params.plantas_alpha + params.plantas_beta)
@@ -651,10 +710,11 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     # preserva EXACTAMENTE el orden de consumo de `rng` de antes de agregar
     # esta fuente, para no cambiar en silencio ningún resultado ya
     # documentado con el flag apagado (default).
+    media_frio, media_calor = medias_climaticas(params)
     if params.correlacionar_frio_calor:
         horas, tmax_verano = _muestrear_clima_correlacionado_antitetico(
-            params.horas_frio_media, params.horas_frio_std,
-            params.calor_verano_media, params.calor_verano_std,
+            media_frio, params.horas_frio_std,
+            media_calor, params.calor_verano_std,
             CORR_HORAS_FRIO_TMAX_VERANO, n, T, rng,
         )
         media_ff = _media_factor_frio(horas)
@@ -668,7 +728,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
         factor_calor = beta_dist.ppf(u_calor, alpha_fc, beta_fc)
     else:
         u_horas = _generar_uniformes_antiteticos(n, (T,), rng)
-        horas = norm.ppf(u_horas, loc=params.horas_frio_media, scale=params.horas_frio_std)
+        horas = norm.ppf(u_horas, loc=media_frio, scale=params.horas_frio_std)
         media_ff = _media_factor_frio(horas)
 
         alpha_ff, beta_ff = _alpha_beta_por_media(media_ff, params.precision_factor_frio)
@@ -676,7 +736,7 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
         factor_frio = beta_dist.ppf(u_frio, alpha_ff, beta_ff)
 
         u_tmax = _generar_uniformes_antiteticos(n, (T,), rng)
-        tmax_verano = norm.ppf(u_tmax, loc=params.calor_verano_media, scale=params.calor_verano_std)
+        tmax_verano = norm.ppf(u_tmax, loc=media_calor, scale=params.calor_verano_std)
         media_fc = _media_factor_calor(tmax_verano)
         alpha_fc, beta_fc = _alpha_beta_por_media(media_fc, params.precision_factor_calor)
         u_calor = _generar_uniformes_antiteticos(n, (T,), rng)
@@ -770,10 +830,11 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     # más arriba). La rama `False` preserva EXACTAMENTE el orden de consumo
     # de `rng` previo a agregar esta fuente, para no cambiar en silencio
     # ningún resultado ya documentado con el flag apagado (default).
+    media_frio, media_calor = medias_climaticas(params)
     if params.correlacionar_frio_calor:
         horas, tmax_verano = _muestrear_clima_correlacionado(
-            params.horas_frio_media, params.horas_frio_std,
-            params.calor_verano_media, params.calor_verano_std,
+            media_frio, params.horas_frio_std,
+            media_calor, params.calor_verano_std,
             CORR_HORAS_FRIO_TMAX_VERANO, (n, T), rng,
         )
         media_ff = _media_factor_frio(horas)
@@ -782,11 +843,11 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
         media_fc = _media_factor_calor(tmax_verano)
         factor_calor = _muestrear_beta_por_media(media_fc, params.precision_factor_calor, rng)
     else:
-        horas = rng.normal(params.horas_frio_media, params.horas_frio_std, (n, T))
+        horas = rng.normal(media_frio, params.horas_frio_std, (n, T))
         media_ff = _media_factor_frio(horas)
         factor_frio = _muestrear_beta_por_media(media_ff, params.precision_factor_frio, rng)
 
-        tmax_verano = rng.normal(params.calor_verano_media, params.calor_verano_std, (n, T))
+        tmax_verano = rng.normal(media_calor, params.calor_verano_std, (n, T))
         media_fc = _media_factor_calor(tmax_verano)
         factor_calor = _muestrear_beta_por_media(media_fc, params.precision_factor_calor, rng)
 
