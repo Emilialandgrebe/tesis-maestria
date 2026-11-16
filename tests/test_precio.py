@@ -93,6 +93,27 @@ def test_mediana_queda_debajo_de_la_trayectoria(especificacion):
     np.testing.assert_allclose(np.median(precios, axis=0)[6:], esperada[6:], rtol=0.01)
 
 
+def test_trayectoria_plana_y_media_igual_al_nivel():
+    """Bloque 6 del Excel: precios reales planos en los años 7-20 (6 / 8 /
+    10 USD/kg de mercado procesado). El AR(1) en niveles revierte a ese
+    nivel y, con la corrección de convexidad, E[precio] = nivel en cada año."""
+    modelo = cargar_modelo_v2()
+    for escenario, nivel in (("pesimista", 6.0), ("base", 8.0), ("optimista", 10.0)):
+        trayectoria = modelo.trayectoria_precio(escenario, N_AÑOS)
+        np.testing.assert_array_equal(trayectoria[:6], 0.0)
+        np.testing.assert_array_equal(trayectoria[6:], nivel)
+    precios = simulate_prices_ar1(200_000, N_AÑOS, ParametrosPrecioAR1(), np.random.default_rng(3))
+    np.testing.assert_allclose(precios.mean(axis=0)[6:], 8.0, rtol=0.005)
+
+
+def test_trayectoria_plan_original_solo_referencia():
+    """La trayectoria vieja sigue disponible como referencia (8 -> 11,5),
+    pero ningún escenario por defecto la usa."""
+    vieja = cargar_modelo_v2().trayectoria_precio("plan_original", N_AÑOS)
+    assert vieja[6] == 8.0 and vieja[-1] == 11.5
+    assert ParametrosPrecioAR1().escenario == "base"
+
+
 def test_nivel_mult_escala_la_media():
     params = ParametrosPrecioAR1(nivel_mult=1.2)
     precios = simulate_prices_ar1_antitetico(10_000, N_AÑOS, params, np.random.default_rng(42))

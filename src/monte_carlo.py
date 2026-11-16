@@ -936,15 +936,22 @@ def simulate_revenue(
     yields_kg_ha: np.ndarray,
     prices_usd_kg: np.ndarray,
     hectareas: float,
+    costos: ParametrosCostos,
 ) -> np.ndarray:
     """
-    Calcula los ingresos brutos en USD: rendimiento × precio × superficie.
+    Ingresos brutos en USD (Producción!11 del Excel):
+
+        kg verdes/ha × superficie × conversión a seco × precio de mercado × proporción
+
+    `yields_kg_ha` está en kg VERDES y `prices_usd_kg` es el precio de
+    MERCADO del producto procesado; la conversión y la proporción (y sus
+    interruptores) vienen de `costos` (Supuestos, bloque 8).
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
-    return yields_kg_ha * prices_usd_kg * hectareas
+    return costos.kg_vendidos(yields_kg_ha * hectareas) * costos.precio_recibido(prices_usd_kg)
 
 
 # ---------------------------------------------------------------------------
@@ -1162,9 +1169,10 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
-    produccion_kg = yields * params.hectareas
-    revenue = simulate_revenue(yields, prices, params.hectareas)
-    opex = opex_total(produccion_kg, revenue, costos, opex_multiplicador)
+    # Rendimiento en kg verdes; maquila e ingresos sobre kg secos (bloque 8).
+    produccion_kg_seco = costos.kg_vendidos(yields * params.hectareas)
+    revenue = simulate_revenue(yields, prices, params.hectareas, costos)
+    opex = opex_total(produccion_kg_seco, revenue, costos, opex_multiplicador)
     flujo = flujo_caja_neto(revenue, opex, costos)
     flujo_neto = flujo["flujo_neto"]
 
@@ -1178,8 +1186,9 @@ def _orquestar_resultado(
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
-        "rendimiento_kg_ha": yields.ravel(),
-        "precio_usd_kg":    prices.ravel(),
+        "rendimiento_kg_ha": yields.ravel(),  # kg verdes / ha
+        "produccion_kg_seco": produccion_kg_seco.ravel(),
+        "precio_usd_kg":    prices.ravel(),  # precio de mercado procesado
         "ingreso_usd":      revenue.ravel(),
         "opex_usd":         opex.ravel(),
         "ebitda_usd":       flujo["ebitda"].ravel(),
@@ -1377,6 +1386,20 @@ def _tir_vectorizada(
         if np.sign(van_fila(a)) != np.sign(van_fila(b)):
             r[i] = brentq(van_fila, a, b, xtol=tol)
     return r
+
+
+def precio_equilibrio(df: pd.DataFrame, año: int = 12) -> pd.Series:
+    """
+    Precio de equilibrio del `año` por simulación, en USD por kg SECO
+    recibido por la finca: OPEX del año / kg secos del año (Flujo!B11 del
+    Excel, año 12 = plena producción). Es el precio recibido que cubre el
+    OPEX (con IIBB incluido al precio actual); para pasarlo a precio de
+    mercado hay que dividir por `ParametrosCostos.factor_precio_recibido`.
+    NaN si ese año no hay producción.
+    """
+    fila = df[df["año"] == año].set_index("simulacion")
+    kg = fila["produccion_kg_seco"].where(fila["produccion_kg_seco"] > 0)
+    return (fila["opex_usd"] / kg).rename("precio_equilibrio_usd_kg_seco")
 
 
 def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFrame:

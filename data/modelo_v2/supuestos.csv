@@ -3,7 +3,7 @@ ultimo_anio_preproductivo,6.0,año,Supuestos!B8
 hectareas_referencia,120.0,ha,Supuestos!B11
 plantas_totales,45000.0,plantas,Supuestos!B16
 proporcion_machos,0.08,fracción,Supuestos!B17
-rendimiento_plena_kg_ha,3000.0,kg/ha,Supuestos!B20
+rendimiento_plena_kg_ha,3000.0,kg verde/ha,Supuestos!B20
 ha_por_sistema_solar,50.0,ha,Supuestos!B21
 salario_operario_usd_mes,850.0,USD/mes,Supuestos!B25
 salario_encargado_usd_mes,1400.0,USD/mes,Supuestos!B26
@@ -19,10 +19,13 @@ alicuota_ganancias,0.25,fracción,Supuestos!B46
 alicuota_iibb,0.02,fracción de ventas,Supuestos!B47
 inflacion_eeuu,0.025,fracción/año,Supuestos!B48
 tasa_descuento_real,0.142305365853659,fracción/año,Supuestos!B49
-quebrantos_aplicar,1.0,0/1,Supuestos!B64
-quebrantos_anios,5.0,años,Supuestos!B65
-activar_opex_pre,0.0,0/1,Supuestos!B66
-vida_util_implantacion,20.0,años,Supuestos!B67
+quebrantos_aplicar,1.0,0/1,Supuestos!B65
+quebrantos_anios,5.0,años,Supuestos!B66
+activar_opex_pre,0.0,0/1,Supuestos!B67
+vida_util_implantacion,20.0,años,Supuestos!B68
+factor_conversion_seco,0.5,kg seco/kg verde,Supuestos!B71
+precio_al_productor,1.0,0/1,Supuestos!B72
+proporcion_precio_productor,0.5,proporción,Supuestos!B73
 tasa_rf,0.0395,fracción/año,Tasa!B6
 prima_mercado,0.0423,fracción/año,Tasa!B7
 beta_desapalancada,0.81,-,Tasa!B8

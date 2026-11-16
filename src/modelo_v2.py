@@ -7,6 +7,12 @@ es el único punto del motor que lee esos archivos: `src/costos.py`,
 CAPEX, OPEX y las series anuales (curva de rendimiento, precios por
 escenario, rampa de fertilización).
 
+Los precios de los escenarios son precios de MERCADO del producto procesado
+(seco con cáscara), en USD constantes 2026, planos en los años 7-20
+(pesimista 6, base 8, optimista 10 USD/kg; Supuestos, bloque 6). La
+conversión a precio recibido por la finca está en `src/costos.py`
+(bloque 8).
+
 Todas las series anuales se devuelven indexadas por año del proyecto 1..20
 (el año 0 del Excel solo tiene CAPEX, que el motor maneja aparte).
 """
@@ -26,6 +32,10 @@ _COLUMNA_PRECIO = {
     "pesimista": "precio_pesimista_usd_kg",
     "base": "precio_base_usd_kg",
     "optimista": "precio_optimista_usd_kg",
+    # Trayectoria creciente del plan original (8 -> 11,5 USD/kg). Solo
+    # referencia: ningún caller la usa por defecto; sirve para reproducir el
+    # plan original (tests/test_consistencia_excel.py).
+    "plan_original": "precio_plan_original_usd_kg",
 }
 
 
@@ -58,7 +68,11 @@ class ModeloV2:
         return self.serie("rendimiento_pct_plena", n_años)
 
     def trayectoria_precio(self, escenario: str, n_años: int) -> np.ndarray:
-        """Precio USD/kg (USD constantes 2026) por año para un escenario."""
+        """Precio de mercado USD/kg seco (USD constantes 2026) por año.
+
+        `escenario`: "pesimista", "base", "optimista" o "plan_original"
+        (trayectoria vieja, solo referencia).
+        """
         if escenario not in _COLUMNA_PRECIO:
             raise ValueError(f"escenario debe ser uno de {list(_COLUMNA_PRECIO)}, recibido {escenario!r}")
         return self.serie(_COLUMNA_PRECIO[escenario], n_años)

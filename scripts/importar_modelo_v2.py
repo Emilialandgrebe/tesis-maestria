@@ -10,8 +10,10 @@ Archivos que genera:
 - supuestos.csv   parámetros escalares (hoja Supuestos + hoja Tasa)
 - capex.csv       ítems de CAPEX con vida útil y regla de escala con hectáreas
 - opex.csv        ítems de OPEX (parte A de la hoja OPEX) con etapa, rampa y tipo
-- anual.csv       series por año 0-20: curva de rendimiento, precios por
-                  escenario y rampa de fertilización (Supuestos, filas 54-58)
+- anual.csv       series por año 0-20: curva de rendimiento, precios de
+                  mercado por escenario, trayectoria de precio del plan
+                  original (solo referencia, el motor no la usa) y rampa de
+                  fertilización (Supuestos, filas 54-59)
 - referencia_flujo.csv        flujo de fondos año a año de la hoja Flujo
                               (incluye las filas 32-35: quebrantos utilizados,
                               OPEX pre-productivo activado, amortización del
@@ -50,7 +52,7 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "hectareas_referencia": ("Supuestos!B11", "ha", "Superficie a plantar"),
     "plantas_totales": ("Supuestos!B16", "plantas", "Plantas totales"),
     "proporcion_machos": ("Supuestos!B17", "fracción", "Proporción de machos"),
-    "rendimiento_plena_kg_ha": ("Supuestos!B20", "kg/ha", "Rendimiento a plena producción"),
+    "rendimiento_plena_kg_ha": ("Supuestos!B20", "kg verde/ha", "Rendimiento a plena producción"),
     "ha_por_sistema_solar": ("Supuestos!B21", "ha", "Hectáreas cubiertas por cada sistema solar"),
     "salario_operario_usd_mes": ("Supuestos!B25", "USD/mes", "Salario base operario"),
     "salario_encargado_usd_mes": ("Supuestos!B26", "USD/mes", "Salario base encargado"),
@@ -66,10 +68,16 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "alicuota_iibb": ("Supuestos!B47", "fracción de ventas", "Alícuota de Ingresos Brutos"),
     "inflacion_eeuu": ("Supuestos!B48", "fracción/año", "Inflación esperada EE.UU."),
     "tasa_descuento_real": ("Supuestos!B49", "fracción/año", "Tasa de descuento real"),
-    "quebrantos_aplicar": ("Supuestos!B64", "0/1", "Aplicar traslado de quebrantos"),
-    "quebrantos_anios": ("Supuestos!B65", "años", "Años de traslado de quebrantos"),
-    "activar_opex_pre": ("Supuestos!B66", "0/1", "Activar OPEX pre-productivo como costo de implantación"),
-    "vida_util_implantacion": ("Supuestos!B67", "años", "Vida útil del costo de implantación activado"),
+    "quebrantos_aplicar": ("Supuestos!B65", "0/1", "Aplicar traslado de quebrantos"),
+    "quebrantos_anios": ("Supuestos!B66", "años", "Años de traslado de quebrantos"),
+    "activar_opex_pre": ("Supuestos!B67", "0/1", "Activar OPEX pre-productivo como costo de implantación"),
+    "vida_util_implantacion": ("Supuestos!B68", "años", "Vida útil del costo de implantación activado"),
+    # Bloque 8: base de ingresos. Factor y proporción SIN VALIDAR con el
+    # asesor agronómico: se cambian en el Excel y se vuelve a correr este
+    # script (ver ParametrosCostos en src/costos.py).
+    "factor_conversion_seco": ("Supuestos!B71", "kg seco/kg verde", "Factor de conversión verde → seco"),
+    "precio_al_productor": ("Supuestos!B72", "0/1", "Precio recibido: 1 = al productor"),
+    "proporcion_precio_productor": ("Supuestos!B73", "proporción", "Precio al productor / precio de mercado"),
     "tasa_rf": ("Tasa!B6", "fracción/año", "Tasa libre de riesgo"),
     "prima_mercado": ("Tasa!B7", "fracción/año", "Prima de riesgo de mercado"),
     "beta_desapalancada": ("Tasa!B8", "-", "Beta desapalancada"),
@@ -81,10 +89,15 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
 # Filas de la hoja Supuestos con series por año (columnas D..X = años 0..20)
 SERIES_ANUALES: dict[str, tuple[int, str]] = {
     "rendimiento_pct_plena": (54, "Rendimiento (% de plena producción)"),
+    # Precios de MERCADO del producto procesado (seco con cáscara)
     "precio_pesimista_usd_kg": (55, "Precio pesimista"),
     "precio_base_usd_kg": (56, "Precio base"),
     "precio_optimista_usd_kg": (57, "Precio optimista"),
-    "rampa_fertilizacion": (58, "Fertilización y fitosanidad"),
+    # Trayectoria creciente del plan original: el Excel la guarda como
+    # referencia y no la usa; el motor tampoco, salvo pidiéndola explícita
+    # (escenario "plan_original", ver src/modelo_v2.py).
+    "precio_plan_original_usd_kg": (58, "Referencia: trayectoria del plan original"),
+    "rampa_fertilizacion": (59, "Fertilización y fitosanidad"),
 }
 
 # Celdas de Supuestos que dependen de la superficie: si la fórmula de
@@ -179,7 +192,8 @@ def _exportar_capex(valores, formulas) -> pd.DataFrame:
 def _tipo_opex(unidad, costo_anual, aplica_en) -> str:
     if isinstance(costo_anual, str) and "Personal" in costo_anual:
         return "personal"
-    if unidad == "USD/kg":
+    # "USD/kg seco" desde que el Excel distingue kg verdes de kg secos
+    if isinstance(unidad, str) and unidad.startswith("USD/kg"):
         return "por_kg"
     if unidad == "% ventas":
         return "pct_ventas"
@@ -292,9 +306,16 @@ def _exportar_referencia(valores) -> tuple[pd.DataFrame, pd.DataFrame]:
     for nombre, fila in _FILAS_FLUJO.items():
         flujo[nombre] = [float(hv[f"{c}{fila}"].value or 0) for c in COLUMNAS_AÑOS]
 
+    if not str(hv["A11"].value or "").startswith("Precio de equilibrio"):
+        raise ValueError(f"Flujo!A11: se esperaba 'Precio de equilibrio...', se encontró {hv['A11'].value!r}")
+    # Flujo!B6 = IFERROR(IRR(...), "No definida"): sin TIR se exporta NaN.
+    tir = hv["B6"].value
     indicadores = pd.DataFrame([
         {"indicador": "van_usd", "valor": float(hv["B5"].value), "fuente": "Flujo!B5"},
-        {"indicador": "tir_real", "valor": float(hv["B6"].value), "fuente": "Flujo!B6"},
+        {"indicador": "tir_real", "valor": float(tir) if isinstance(tir, (int, float)) else float("nan"),
+         "fuente": "Flujo!B6"},
+        {"indicador": "precio_equilibrio_anio12_usd_kg_seco", "valor": float(hv["B11"].value),
+         "fuente": "Flujo!B11"},
         {"indicador": "tasa_descuento_real", "valor": float(hv["G5"].value), "fuente": "Flujo!G5"},
         {"indicador": "capex_total_usd", "valor": float(valores["CAPEX"]["F37"].value), "fuente": "CAPEX!F37"},
         {"indicador": "escenario_precio", "valor": float(valores["Supuestos"]["B22"].value), "fuente": "Supuestos!B22 (1/2/3)"},

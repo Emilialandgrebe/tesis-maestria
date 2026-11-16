@@ -2,7 +2,12 @@
 
 El precio simulado es la trayectoria base del Excel v2 (USD constantes 2026,
 por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
-logarítmico estocástico:
+logarítmico estocástico. Desde la sincronización con el bloque 6 del Excel
+(2026-11-16) la trayectoria es PLANA en los años 7-20: precio real de
+mercado del producto procesado de 6 / 8 / 10 USD/kg (pesimista / base /
+optimista), porque la serie histórica deflactada no muestra suba real. La
+trayectoria creciente del plan original (8 -> 11,5) queda solo como
+referencia (escenario "plan_original" de `src/modelo_v2.py`).
 
     precio_t = nivel_mult * trayectoria_t * exp(d_t - Var[d_t] / 2)
 
@@ -12,8 +17,9 @@ con el mismo sigma_eps:
 
 - "niveles" (PRINCIPAL desde 2026-11-04): AR(1) del desvío log respecto de
   la trayectoria, d_t = phi * d_(t-1) + sigma_eps * Z_t + c (acumulado como
-  c * t), d_0 = 0, phi = PHI_NIVELES. Revierte a la trayectoria (semivida
-  ~4 años); la varianza converge a sigma^2 / (1 - phi^2).
+  c * t), d_0 = 0, phi = PHI_NIVELES. Revierte a la trayectoria, que
+  ahora es un nivel plano (8 USD/kg en el base), con semivida ~4 años; la
+  varianza converge a sigma^2 / (1 - phi^2).
 - "retornos" (escenario de ESTRÉS): AR(1) sobre los retornos log,
   ARIMA(1,1,0), phi = PHI_RETORNOS. El desvío no revierte y la varianza
   crece con el horizonte.
@@ -25,8 +31,8 @@ dos. Se eligió "niveles" por plausibilidad: su dispersión estacionaria
 (0,23-0,28 y 2,44), mientras que "retornos" llega al año 20 con el doble
 (0,52, P95/P5 5,7). Ver notas/PLAN_TESIS.md.
 
-La tendencia la pone la trayectoria del Excel, no el AR(1): por eso el drift
-`c` vale 0 por defecto. Criterio de VALOR ESPERADO: la trayectoria es la
+El AR(1) no agrega tendencia: el drift `c` vale 0 por defecto, coherente
+con la trayectoria plana (sin suba real). Criterio de VALOR ESPERADO: la trayectoria es la
 MEDIA del precio simulado, no la mediana. Como d_t es normal,
 E[exp(d_t)] = exp(E[d_t] + Var[d_t]/2); restar Var[d_t]/2 (la varianza
 exacta bajo cada especificación, ver `varianza_desvio_log()`) deja
@@ -51,9 +57,10 @@ import numpy as np
 from src.modelo_v2 import cargar_modelo_v2
 
 # AR(1) por OLS sobre log(precio real) anual 1991-2026 con constante y
-# tendencia lineal (la trayectoria del Excel tiene tendencia, así que la
-# reversión es a una senda con pendiente): phi=0,8391 (EE 0,106), semivida
-# ~4 años. Sin tendencia da 0,8761.
+# tendencia lineal: phi=0,8391 (EE 0,106), semivida ~4 años. Sin tendencia
+# da 0,8761. Se estimó cuando la trayectoria del Excel tenía pendiente;
+# con la trayectoria plana se mantiene 0,8391 (pendiente de revisar, no
+# cambiado en la sincronización 2026-11-16).
 PHI_NIVELES = 0.8391
 
 # AR(1) sobre los retornos log reales (2026-11-04, 1991-2026, n=34):
@@ -68,7 +75,7 @@ class ParametrosPrecioAR1:
     escenario: Literal["pesimista", "base", "optimista"] = "base"
     # Drift real ADICIONAL sobre la trayectoria, en log por año. 0 por
     # defecto: la estimación sobre la serie real da c=-0.0015
-    # (indistinguible de cero), y la tendencia ya está en la trayectoria.
+    # (indistinguible de cero), y la trayectoria es plana.
     # Sobol y `src/dataset_ml.py` lo barren como supuesto incierto. En
     # "niveles" desplaza la senda a la que revierte el precio (c * t); en
     # "retornos" es la constante del AR(1) sobre retornos.
@@ -81,7 +88,8 @@ class ParametrosPrecioAR1:
     # de la especificación: ver `precio_retornos_estres()`.
     especificacion: Literal["retornos", "niveles"] = "niveles"
     # Multiplicador de TODA la trayectoria base: incertidumbre sobre el
-    # nivel del precio (Sobol y dataset lo barren en 0,8-1,2).
+    # nivel del precio (Sobol lo barre en 0,75-1,25: 6-10 USD/kg sobre el
+    # base de 8; el dataset ML sigue en 0,8-1,2).
     nivel_mult: float = 1.0
     # Trayectoria base propia (USD/kg por año 1..n), en lugar de la del Excel
     # del `escenario`. None (default) usa la del Excel. Solo para análisis

@@ -27,13 +27,16 @@ from src.precio_estocastico import ParametrosPrecioAR1
 # - hectareas [60, 180]: la mitad y 1,5 veces las 120 ha del plan v2.
 # - precio_drift_anual [-0.0125, 0.0125]: drift real ADICIONAL del AR(1)
 #   sobre la trayectoria del Excel (ParametrosPrecioAR1.c), mismo rango que
-#   src/dataset_ml.py. Es un supuesto incierto (el drift estimado sobre la
-#   serie real, -0,15% anual, no es distinguible de cero), no ruido dentro
-#   de la simulación, así que entra a Sobol como el resto.
-# - precio_nivel_mult [0.8, 1.2]: multiplica TODA la trayectoria base de
+#   src/dataset_ml.py. Centrado en 0: desde 2026-11-16 la trayectoria del
+#   Excel es plana (precio real constante), así que el drift total del
+#   precio también queda centrado en 0, coherente con la serie histórica
+#   deflactada (drift estimado -0,15% anual, indistinguible de cero). Es un
+#   supuesto incierto, no ruido dentro de la simulación, así que entra a
+#   Sobol como el resto.
+# - precio_nivel_mult [0.75, 1.25]: multiplica TODA la trayectoria base de
 #   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
-#   del precio, que la sensibilidad al precio plano mostró que es lo que más
-#   mueve P(VAN<0) (ver notas/PLAN_TESIS.md).
+#   del precio. Sobre el base (8 USD/kg) cubre 6-10 USD/kg, el rango entre
+#   el pesimista y el optimista del Excel (antes 0,8-1,2 = 6,4-9,6).
 PROBLEMA_SOBOL: dict = {
     "num_vars": 8,
     "names": [
@@ -54,7 +57,7 @@ PROBLEMA_SOBOL: dict = {
         [0.0, 0.30],
         [60.0, 180.0],
         [-0.0125, 0.0125],
-        [0.8, 1.2],
+        [0.75, 1.25],
     ],
 }
 

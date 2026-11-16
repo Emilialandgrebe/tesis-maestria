@@ -9,7 +9,7 @@ Fitosanidad,Herbicidas,ha,120.0,150.0,18000.0,USD,Todos,False,A confirmar,F22,fi
 Combustible y energía,Gasoil tractor y maquinaria (240 l/ha),litro,28800.0,1.1,31680.0,ARS,Todos,False,A confirmar,F22,fijo_anual,ha
 Combustible y energía,"Energía de bombeo (sistema solar aislado, sin red)",kWh,0.0,0.0,0.0,ARS,Todos,False,Cotizado,F09,fijo_anual,fijo
 Cosecha y procesado,Cosecha mecánica (incluye traslado a planta),ha,120.0,500.0,60000.0,ARS,Prod,False,Cotizado,F16,fijo_anual,ha
-Cosecha y procesado,Maquila de descascarado y secado,USD/kg,0.0,0.4,0.0,ARS,Prod,False,A confirmar,F17,por_kg,fijo
+Cosecha y procesado,Maquila de descascarado y secado (por kg seco),USD/kg seco,0.0,0.4,0.0,ARS,Prod,False,A confirmar,F17,por_kg,fijo
 Mantenimiento,Mantenimiento de maquinaria y riego,ha,120.0,212.0,25440.0,ARS,Todos,False,A confirmar,F22,fijo_anual,ha
 Mantenimiento,Reposición de plantas fallidas (5%),planta,2070.0,9.0,18630.0,USD,Año 1,False,Estimado,F07,fijo_anual,ha
 Mantenimiento,Renovación de plantas (1%/año),planta,450.0,9.0,4050.0,USD,Prod,False,A confirmar,F22,fijo_anual,ha
