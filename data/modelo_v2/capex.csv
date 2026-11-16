@@ -18,7 +18,7 @@ Maquinaria,Subsolador 3 cuerpos,unidad,1.0,4000.0,4000.0,USD,10,Mes 4-9,Estimado
 Maquinaria,Rastra 16 discos,unidad,1.0,3800.0,3800.0,USD,10,Mes 4-9,Estimado,F08,fijo,False
 Maquinaria,"Desmalezadora 1,50 m",unidad,1.0,4200.0,4200.0,USD,10,Mes 4-9,Estimado,F08,fijo,False
 Maquinaria,Arado de discos,unidad,1.0,3500.0,3500.0,USD,10,Mes 4-9,Estimado,F08,fijo,False
-Riego,"Sistema solar aislado para bombeo (228 kWp, + IVA)",sistema,3.0,128208.4,384625.2,USD,20,Mes 4-9,Cotizado,F09,sistema_solar,False
+Riego,"Sistema solar aislado para bombeo (228 kWp, + IVA)",sistema,3.0,128208.4,384625.19999999995,USD,20,Mes 4-9,Cotizado,F09,sistema_solar,False
 Infraestructura,Galpón de herramientas,m²,200.0,250.0,50000.0,ARS,50,Mes 9-15,Estimado,F10,fijo,False
 Infraestructura,Sistema eléctrico de finca (trifásica + tableros),global,1.0,15000.0,15000.0,ARS,10,Mes 9-15,Estimado,,fijo,False
 Infraestructura,Camino interno de ripio,km,3.0,4000.0,12000.0,ARS,10,Mes 9-15,Estimado,,fijo,False
@@ -27,7 +27,7 @@ Infraestructura,Red antigranizo (no incluida en Fase I),ha,0.0,16400.0,0.0,USD,1
 Infraestructura,Oficina / vivienda del encargado (prefabricada),global,1.0,12000.0,12000.0,ARS,20,Mes 9-15,Estimado,,fijo,False
 Tecnología,Software de gestión agrícola,año,0.0,0.0,0.0,USD,3,Mes 9-15,Estimado,,fijo,False
 Tecnología,Sitio web / e-commerce,global,0.0,0.0,0.0,ARS,3,Mes 9-15,Estimado,,fijo,False
-Administrativos,Acta de constatación de tareas,tarea,1.0,228.758169934641,228.758169934641,ARS,0,Mes 9-15,Estimado,,fijo,False
+Administrativos,Acta de constatación de tareas,tarea,1.0,228.75816993464053,228.75816993464053,ARS,0,Mes 9-15,Estimado,,fijo,False
 Administrativos,Rodados (2 utilitarios usados),unidad,2.0,20000.0,40000.0,ARS,5,Mes 9-15,Estimado,F12,fijo,False
 Societarios,Constitución e inscripción de la SAS,global,1.0,2614.37908496732,2614.37908496732,ARS,5,Mes 1-3,Cotizado,F13,fijo,False
-Societarios,"Gastos de constitución (escribanía, DPJ, sellos, libros)",global,1.0,597.777777777778,597.777777777778,ARS,5,Mes 1-3,Cotizado,F13,fijo,False
+Societarios,"Gastos de constitución (escribanía, DPJ, sellos, libros)",global,1.0,597.7777777777778,597.7777777777778,ARS,5,Mes 1-3,Cotizado,F13,fijo,False

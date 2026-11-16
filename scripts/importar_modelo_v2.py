@@ -12,8 +12,9 @@ Archivos que genera:
 - opex.csv        ítems de OPEX (parte A de la hoja OPEX) con etapa, rampa y tipo
 - anual.csv       series por año 0-20: curva de rendimiento, precios de
                   mercado por escenario, trayectoria de precio del plan
-                  original (solo referencia, el motor no la usa) y rampa de
-                  fertilización (Supuestos, filas 54-59)
+                  original (solo referencia, el motor no la usa), rampa de
+                  fertilización (Supuestos, filas 54-59) y precios en verde
+                  por escenario (bloque 9, filas 80-82)
 - referencia_flujo.csv        flujo de fondos año a año de la hoja Flujo
                               (incluye las filas 32-35: quebrantos utilizados,
                               OPEX pre-productivo activado, amortización del
@@ -78,6 +79,8 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "factor_conversion_seco": ("Supuestos!B71", "kg seco/kg verde", "Factor de conversión verde → seco"),
     "precio_al_productor": ("Supuestos!B72", "0/1", "Precio recibido: 1 = al productor"),
     "proporcion_precio_productor": ("Supuestos!B73", "proporción", "Precio al productor / precio de mercado"),
+    # Bloque 9: venta en verde a la procesadora (caso base)
+    "venta_verde": ("Supuestos!B78", "0/1", "Venta en verde a la procesadora"),
     "tasa_rf": ("Tasa!B6", "fracción/año", "Tasa libre de riesgo"),
     "prima_mercado": ("Tasa!B7", "fracción/año", "Prima de riesgo de mercado"),
     "beta_desapalancada": ("Tasa!B8", "-", "Beta desapalancada"),
@@ -98,6 +101,10 @@ SERIES_ANUALES: dict[str, tuple[int, str]] = {
     # (escenario "plan_original", ver src/modelo_v2.py).
     "precio_plan_original_usd_kg": (58, "Referencia: trayectoria del plan original"),
     "rampa_fertilizacion": (59, "Fertilización y fitosanidad"),
+    # Bloque 9: precios en verde (USD/kg verde pagado por la procesadora)
+    "precio_verde_pesimista_usd_kg": (80, "Precio en verde – pesimista"),
+    "precio_verde_base_usd_kg": (81, "Precio en verde – base"),
+    "precio_verde_optimista_usd_kg": (82, "Precio en verde – optimista"),
 }
 
 # Celdas de Supuestos que dependen de la superficie: si la fórmula de
@@ -314,7 +321,8 @@ def _exportar_referencia(valores) -> tuple[pd.DataFrame, pd.DataFrame]:
         {"indicador": "van_usd", "valor": float(hv["B5"].value), "fuente": "Flujo!B5"},
         {"indicador": "tir_real", "valor": float(tir) if isinstance(tir, (int, float)) else float("nan"),
          "fuente": "Flujo!B6"},
-        {"indicador": "precio_equilibrio_anio12_usd_kg_seco", "valor": float(hv["B11"].value),
+        # USD por kg VENDIDO (verde con venta_verde = 1, seco si no)
+        {"indicador": "precio_equilibrio_anio12_usd_kg_vendido", "valor": float(hv["B11"].value),
          "fuente": "Flujo!B11"},
         {"indicador": "tasa_descuento_real", "valor": float(hv["G5"].value), "fuente": "Flujo!G5"},
         {"indicador": "capex_total_usd", "valor": float(valores["CAPEX"]["F37"].value), "fuente": "CAPEX!F37"},

@@ -33,10 +33,11 @@ from src.precio_estocastico import ParametrosPrecioAR1
 #   deflactada (drift estimado -0,15% anual, indistinguible de cero). Es un
 #   supuesto incierto, no ruido dentro de la simulación, así que entra a
 #   Sobol como el resto.
-# - precio_nivel_mult [0.75, 1.25]: multiplica TODA la trayectoria base de
+# - precio_nivel_mult [0.625, 1.5]: multiplica TODA la trayectoria base de
 #   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
-#   del precio. Sobre el base (8 USD/kg) cubre 6-10 USD/kg, el rango entre
-#   el pesimista y el optimista del Excel (antes 0,8-1,2 = 6,4-9,6).
+#   del precio. En el caso base (venta en verde, 4 USD/kg verde) cubre
+#   2,5-6 USD/kg verde, el rango entre el pesimista y el optimista del
+#   Excel (bloque 9). Asimétrico porque los escenarios lo son.
 PROBLEMA_SOBOL: dict = {
     "num_vars": 8,
     "names": [
@@ -57,7 +58,7 @@ PROBLEMA_SOBOL: dict = {
         [0.0, 0.30],
         [60.0, 180.0],
         [-0.0125, 0.0125],
-        [0.75, 1.25],
+        [0.625, 1.5],
     ],
 }
 

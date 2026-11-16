@@ -2,12 +2,18 @@
 
 El precio simulado es la trayectoria base del Excel v2 (USD constantes 2026,
 por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
-logarítmico estocástico. Desde la sincronización con el bloque 6 del Excel
-(2026-11-16) la trayectoria es PLANA en los años 7-20: precio real de
-mercado del producto procesado de 6 / 8 / 10 USD/kg (pesimista / base /
-optimista), porque la serie histórica deflactada no muestra suba real. La
-trayectoria creciente del plan original (8 -> 11,5) queda solo como
-referencia (escenario "plan_original" de `src/modelo_v2.py`).
+logarítmico estocástico. La trayectoria es PLANA en los años 7-20, porque
+la serie histórica deflactada no muestra suba real:
+
+- caso base (venta en verde, Supuestos bloque 9): precio en verde de
+  2,5 / 4 / 6 USD/kg verde (pesimista / base / optimista);
+- venta_verde = 0 (bloque 6): precio de mercado del producto procesado de
+  6 / 8 / 10 USD/kg seco.
+
+La trayectoria creciente del plan original (8 -> 11,5) queda solo como
+referencia (escenario "plan_original" de `src/modelo_v2.py`). El AR(1) es
+el mismo para las dos bases: la serie de FRED es de precio de mercado, y se
+asume la misma dinámica relativa (desvío log) para el precio en verde.
 
     precio_t = nivel_mult * trayectoria_t * exp(d_t - Var[d_t] / 2)
 
@@ -18,7 +24,8 @@ con el mismo sigma_eps:
 - "niveles" (PRINCIPAL desde 2026-11-04): AR(1) del desvío log respecto de
   la trayectoria, d_t = phi * d_(t-1) + sigma_eps * Z_t + c (acumulado como
   c * t), d_0 = 0, phi = PHI_NIVELES. Revierte a la trayectoria, que
-  ahora es un nivel plano (8 USD/kg en el base), con semivida ~4 años; la
+  ahora es un nivel plano (4 USD/kg verde en el caso base), con semivida
+  ~4 años; la
   varianza converge a sigma^2 / (1 - phi^2).
 - "retornos" (escenario de ESTRÉS): AR(1) sobre los retornos log,
   ARIMA(1,1,0), phi = PHI_RETORNOS. El desvío no revierte y la varianza
@@ -88,17 +95,24 @@ class ParametrosPrecioAR1:
     # de la especificación: ver `precio_retornos_estres()`.
     especificacion: Literal["retornos", "niveles"] = "niveles"
     # Multiplicador de TODA la trayectoria base: incertidumbre sobre el
-    # nivel del precio (Sobol lo barre en 0,75-1,25: 6-10 USD/kg sobre el
-    # base de 8; el dataset ML sigue en 0,8-1,2).
+    # nivel del precio (Sobol lo barre en 0,625-1,5: 2,5-6 USD/kg verde
+    # sobre el base de 4; el dataset ML sigue en 0,8-1,2).
     nivel_mult: float = 1.0
     # Trayectoria base propia (USD/kg por año 1..n), en lugar de la del Excel
     # del `escenario`. None (default) usa la del Excel. Solo para análisis
     # de sensibilidad (p. ej. precio real constante).
     trayectoria: tuple[float, ...] | None = None
+    # Qué precio de referencia usa la trayectoria del Excel: en verde (True)
+    # o de mercado procesado (False). None = lo fija el motor desde
+    # `ParametrosCostos.venta_verde` (ver `_resolver_precio_params()` en
+    # src/monte_carlo.py); usado fuera del motor, sigue al Excel (B78).
+    venta_verde: bool | None = None
 
     def trayectoria_base(self, n_años: int) -> np.ndarray:
         if self.trayectoria is None:
-            base = cargar_modelo_v2().trayectoria_precio(self.escenario, n_años)
+            base = cargar_modelo_v2().trayectoria_precio(
+                self.escenario, n_años, venta_verde=self.venta_verde
+            )
         elif len(self.trayectoria) != n_años:
             raise ValueError(
                 f"trayectoria tiene {len(self.trayectoria)} años, se esperaban {n_años}"
