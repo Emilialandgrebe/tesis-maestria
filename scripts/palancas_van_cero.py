@@ -1,6 +1,10 @@
-"""Palancas para llevar el VAN a cero en el caso base (corrida determinística).
+"""Palancas para llevar el VAN a cero (corrida determinística, caso en verde).
 
-Caso base: venta en verde a la procesadora (Supuestos bloque 9), 4 USD/kg
+Análisis hecho el 2026-11-19 cuando el caso base era la venta en verde; el
+caso base pasó a ser venta en seco, y este script queda FIJADO en verde
+(`venta_verde=True`) para reproducir outputs/palancas_van_cero.csv.
+
+Caso: venta en verde a la procesadora (Supuestos bloque 9), 4 USD/kg
 verde, 3.000 kg verdes/ha a plena producción, 120 ha, tasa real del Excel
 (Supuestos!B49). Es la misma corrida que `ParametrosMC(deterministico=True)`
 (curva del Excel, trayectoria de precio plana, sin ruido), con tres palancas:
@@ -56,8 +60,9 @@ def _corrida(
 ) -> tuple[pd.DataFrame, ParametrosCostos, ParametrosMC]:
     extra = {} if tasa is None else {"tasa_descuento": tasa}
     params = ParametrosMC(n_simulaciones=1, deterministico=True, **extra)
-    costos = ParametrosCostos(hectareas=params.hectareas, capex_factor=1.0 - reduccion_capex)
-    assert costos.venta_verde, "el caso base es venta en verde"
+    costos = ParametrosCostos(
+        hectareas=params.hectareas, capex_factor=1.0 - reduccion_capex, venta_verde=True
+    )
     yields, prices, capex_extra, _ = _componentes_deterministicos(params, costos)
     if precio_verde is not None:
         precio_base = prices[0][prices[0] > 0][0]

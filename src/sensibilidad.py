@@ -35,9 +35,11 @@ from src.precio_estocastico import ParametrosPrecioAR1
 #   Sobol como el resto.
 # - precio_nivel_mult [0.625, 1.5]: multiplica TODA la trayectoria base de
 #   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
-#   del precio. En el caso base (venta en verde, 4 USD/kg verde) cubre
-#   2,5-6 USD/kg verde, el rango entre el pesimista y el optimista del
-#   Excel (bloque 9). Asimétrico porque los escenarios lo son.
+#   del precio. Fijado para el caso en verde (4 USD/kg verde -> 2,5-6, el
+#   rango pesimista-optimista del bloque 9). En el caso base seco (desde
+#   2026-11-19, 7 USD/kg seco) cubre 4,4-10,5 USD/kg seco, más ancho que
+#   el rango del Excel (5-9, factores 0,71-1,29): revisarlo en el Sobol
+#   del Paso 7.
 PROBLEMA_SOBOL: dict = {
     "num_vars": 8,
     "names": [

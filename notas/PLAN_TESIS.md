@@ -2156,6 +2156,19 @@ palanca de costos sola lleva el VAN a 0 (−99 % de CAPEX: VAN −668k; −100 %
 de OPEX: −118k); TIR real 1,42 %; precio en verde para VAN = 0: 9,52 USD/kg
 (7,39 con −50 % de CAPEX). Exposición máxima de caja: 40.144 USD/ha.
 
+### Cambio de caso base: venta en seco con cáscara (2026-11-19, rama `caso-base-seco`)
+
+La finca vende SECO con cáscara: Supuestos B78 = 0, conversión B71 = 1,00
+(los 3.000 kg/ha ya son secos), precio al productor apagado (B72 = 0;
+los precios del bloque 6 ya son al productor: 5 / 7 / 9 USD/kg seco,
+planos años 7-20) y maquila de pelado y secado activa (0,40 USD/kg seco).
+VAN determinístico: base −1.487.137,36, pesimista −2.512.883,25, optimista
+−468.952,76 (TIR base 9,15 %). Monte Carlo (10.000, niveles): VAN medio
+base −1,47 M, P(VAN<0) 96 % (pesimista 100 %, optimista 71 %). El precio
+explica ~79 % de la varianza del VAN. La venta en verde queda como
+alternativa (sus VAN no cambian). Los análisis de palancas y tipo de cambio
+real y los Sobol guardados son del caso en verde.
+
 ### Paso 7 — próximos pasos (anotados 2026-11-19, sin implementar)
 
 1. **Precio bayesiano** (pedido de Ezequiel). Poner priors sobre los

@@ -46,8 +46,12 @@ HECTAREAS_REFERENCIA = _MODELO.supuestos["hectareas_referencia"]
 # proporcion_precio_productor=...)`.
 FACTOR_CONVERSION_SECO = _MODELO.supuestos["factor_conversion_seco"]
 PROPORCION_PRECIO_PRODUCTOR = _MODELO.supuestos["proporcion_precio_productor"]
+# Interruptor de precio al productor (Supuestos!B72). Caso base (2026-11-19):
+# 0, porque los precios del bloque 6 ya son al productor del seco con cáscara.
+PRECIO_AL_PRODUCTOR = bool(_MODELO.supuestos["precio_al_productor"])
 
-# Caso base (Supuestos, bloque 9): venta en verde a la procesadora.
+# Bloque 9: venta en verde a la procesadora. Caso base desde 2026-11-19:
+# 0 (venta en SECO con cáscara); la venta en verde queda como alternativa.
 VENTA_VERDE = _MODELO.venta_verde
 
 # Variación estructural del OPEX respecto del valor del Excel: triangular
@@ -89,27 +93,30 @@ class ParametrosCostos:
     cambia la base imponible de Ganancias, no la caja. Ver
     `opex_pre_activado()`. Tratamiento fiscal a confirmar con el contador.
 
-    Base de ingresos. El rendimiento de la curva está en kg VERDES (recién
-    cosechados).
+    Base de ingresos. Caso base (desde 2026-11-19): la finca vende SECO con
+    cáscara. El rendimiento de la curva (3.000 kg/ha a plena producción) ya
+    está en kg secos con cáscara.
 
-    `venta_verde=True` (caso base, Supuestos bloque 9 / B78): la finca vende
-    en verde a la procesadora. Ingresos = kg verdes * precio en verde, sin
-    conversión ni maquila; la trayectoria de precio es la en verde
-    (`ModeloV2.trayectoria_precio(..., venta_verde=True)`) y los
-    interruptores del bloque 8 no se usan.
+    `venta_verde=False` (caso base, Supuestos B78 = 0): bloque 8.
 
-    `venta_verde=False`: bloque 8. Los precios son de MERCADO del producto
-    procesado; con los dos interruptores encendidos:
+        kg vendidos     = kg de rendimiento * factor_conversion_seco
+        precio recibido = precio de referencia * proporcion_precio_productor
+        ingresos        = kg vendidos * precio recibido
+        maquila         = costo por kg seco * kg vendidos
 
-        kg secos       = kg verdes * factor_conversion_seco
-        precio recibido = precio de mercado * proporcion_precio_productor
-        ingresos       = kg secos * precio recibido
-        maquila        = costo por kg seco * kg secos
+    En el Excel: conversión B71 = 1,00 (el rendimiento ya es seco) y
+    precio al productor apagado (B72 = 0, `precio_al_productor=False`),
+    porque los precios del bloque 6 (5 / 7 / 9 USD/kg seco) ya son al
+    productor. La maquila de pelado y secado (0,40 USD/kg seco) la paga la
+    finca. `convertir_a_seco=False` fuerza factor 1 y `precio_al_productor=
+    False` proporción 1: los dos apagados reproducen el plan original. Ver
+    `kg_vendidos()` y `precio_recibido()`.
 
-    `convertir_a_seco=False` usa factor 1 (kg verdes = kg vendidos) y
-    `precio_al_productor=False` usa proporción 1 (la finca cobra el precio
-    de mercado, Supuestos!B72 = 0): los dos apagados reproducen el plan
-    original. Ver `kg_vendidos()` y `precio_recibido()`.
+    `venta_verde=True` (alternativa, Supuestos bloque 9): la finca vende en
+    verde a la procesadora. El rendimiento se lee como kg verdes; ingresos
+    = kg verdes * precio en verde, sin conversión ni maquila; la trayectoria
+    de precio es la en verde (`ModeloV2.trayectoria_precio(...,
+    venta_verde=True)`) y los interruptores del bloque 8 no se usan.
 
     Sincronizar `hectareas` con `ParametrosMC.hectareas` es responsabilidad
     de quien arma la simulación (`run_monte_carlo()` lo hace automático).
@@ -126,7 +133,7 @@ class ParametrosCostos:
     venta_verde: bool = VENTA_VERDE
     convertir_a_seco: bool = True
     factor_conversion_seco: float = FACTOR_CONVERSION_SECO
-    precio_al_productor: bool = True
+    precio_al_productor: bool = PRECIO_AL_PRODUCTOR
     proporcion_precio_productor: float = PROPORCION_PRECIO_PRODUCTOR
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
@@ -174,8 +181,9 @@ class ParametrosCostos:
 
     @property
     def factor_kg_vendidos(self) -> float:
-        """kg vendidos por kg verde (Producción!8): 1 en venta en verde; si
-        no, el factor de conversión, o 1 si está apagada."""
+        """kg vendidos por kg de rendimiento (Producción!8): 1 en venta en
+        verde; si no, el factor de conversión (1,00 en el caso base), o 1 si
+        está apagada."""
         if self.venta_verde or not self.convertir_a_seco:
             return 1.0
         return self.factor_conversion_seco

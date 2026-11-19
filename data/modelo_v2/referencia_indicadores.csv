@@ -1,7 +1,7 @@
 indicador,valor,fuente
-van_usd,-2836458.0817855047,Flujo!B5
-tir_real,0.014223392507369814,Flujo!B6
-precio_equilibrio_anio12_usd_kg_vendido,2.1089274530682807,Flujo!B11
+van_usd,-1487137.358497658,Flujo!B5
+tir_real,0.09146927645767744,Flujo!B6
+precio_equilibrio_anio12_usd_kg_vendido,2.5689274530682806,Flujo!B11
 tasa_descuento_real,0.1423053658536586,Flujo!G5
 capex_total_usd,2224279.2350326804,CAPEX!F37
 escenario_precio,2.0,Supuestos!B22 (1/2/3)

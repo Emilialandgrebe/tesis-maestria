@@ -1,4 +1,11 @@
-"""Sensibilidad del caso base al tipo de cambio real (corrida determinística).
+"""Sensibilidad al tipo de cambio real (corrida determinística, caso en verde).
+
+Análisis hecho el 2026-11-19 cuando el caso base era la venta en verde;
+queda FIJADO en verde (`venta_verde=True`) para reproducir
+outputs/tipo_cambio_real.csv. La proporción en pesos del CAPEX no
+cambia con la base de venta; en venta en seco el OPEX suma la maquila,
+que opex.csv marca como pagada en pesos (ARS), así que la proporción en
+pesos del OPEX sube.
 
 El motor trabaja todo en USD y NO modela el tipo de cambio real: la columna
 `moneda_pago` de data/modelo_v2/{capex,opex}.csv es informativa y ningún
@@ -64,7 +71,7 @@ def _modelo_con_ars(modelo, factor: float):
 
 def corrida(factor_ars: float = 1.0) -> dict:
     params = ParametrosMC(n_simulaciones=1, deterministico=True)
-    base = ParametrosCostos(hectareas=params.hectareas)
+    base = ParametrosCostos(hectareas=params.hectareas, venta_verde=True)
     costos = replace(base, modelo=_modelo_con_ars(base.modelo, factor_ars))
     yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params, costos)
     df = _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
@@ -79,7 +86,7 @@ def corrida(factor_ars: float = 1.0) -> dict:
 
 def proporciones_ars() -> dict:
     params = ParametrosMC(n_simulaciones=1, deterministico=True)
-    costos = ParametrosCostos(hectareas=params.hectareas)
+    costos = ParametrosCostos(hectareas=params.hectareas, venta_verde=True)
     T = params.n_años
 
     items = costos.capex_items

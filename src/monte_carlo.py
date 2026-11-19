@@ -993,12 +993,13 @@ def simulate_revenue(
     """
     Ingresos brutos en USD (Producción!11 del Excel):
 
-        kg verdes/ha × superficie × factor kg vendidos × precio de referencia × factor precio recibido
+        kg/ha × superficie × factor kg vendidos × precio de referencia × factor precio recibido
 
-    `yields_kg_ha` está en kg VERDES. Con `costos.venta_verde` (caso base)
-    los dos factores valen 1 y `prices_usd_kg` es el precio en verde; si no,
-    es el precio de MERCADO del procesado y los factores son la conversión
-    y la proporción del bloque 8 (con sus interruptores).
+    Caso base (`costos.venta_verde=False`): `yields_kg_ha` en kg secos con
+    cáscara, `prices_usd_kg` el precio al productor del seco y los factores
+    del bloque 8 (conversión 1,00, proporción apagada) valen 1. Con
+    `costos.venta_verde` (alternativa) los factores valen 1, el rendimiento
+    se lee como kg verdes y `prices_usd_kg` es el precio en verde.
 
     Retorna
     -------
@@ -1223,8 +1224,8 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
-    # Rendimiento en kg verdes; ingresos y maquila sobre kg vendidos (verdes
-    # en venta en verde, secos con el bloque 8).
+    # Rendimiento en kg/ha (secos con cáscara en el caso base); ingresos y
+    # maquila sobre kg vendidos (secos con el bloque 8, verdes en venta en verde).
     produccion_kg_vendidos = costos.kg_vendidos(yields * params.hectareas)
     revenue = simulate_revenue(yields, prices, params.hectareas, costos)
     opex = opex_total(produccion_kg_vendidos, revenue, costos, opex_multiplicador)
@@ -1241,9 +1242,9 @@ def _orquestar_resultado(
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
-        "rendimiento_kg_ha": yields.ravel(),  # kg verdes / ha
+        "rendimiento_kg_ha": yields.ravel(),  # kg/ha (secos con cáscara en el caso base)
         "produccion_kg_vendidos": produccion_kg_vendidos.ravel(),
-        "precio_usd_kg":    prices.ravel(),  # precio de referencia (verde o mercado)
+        "precio_usd_kg":    prices.ravel(),  # precio de referencia (seco al productor o verde)
         "ingreso_usd":      revenue.ravel(),
         "opex_usd":         opex.ravel(),
         "ebitda_usd":       flujo["ebitda"].ravel(),
@@ -1456,8 +1457,8 @@ def _tir_vectorizada(
 def precio_equilibrio(df: pd.DataFrame, año: int = 12) -> pd.Series:
     """
     Precio de equilibrio del `año` por simulación, en USD por kg VENDIDO
-    recibido por la finca (kg verde en venta en verde, kg seco con el
-    bloque 8): OPEX del año / kg vendidos del año (Flujo!B11 del Excel, año
+    recibido por la finca (kg seco con cáscara en el caso base, kg verde
+    en venta en verde): OPEX del año / kg vendidos del año (Flujo!B11 del Excel, año
     12 = plena producción). Es el precio recibido que cubre el OPEX (con
     IIBB incluido al precio actual). NaN si ese año no hay producción.
     """

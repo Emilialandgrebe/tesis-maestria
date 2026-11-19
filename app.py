@@ -248,7 +248,7 @@ def cargar_sobol(ruta: str) -> pd.DataFrame:
 
 st.set_page_config(page_title="Monte Carlo — Pistacho Jocolí", layout="wide")
 st.title("Simulación de Monte Carlo — Pistacho Jocolí")
-st.subheader("Caso base: venta del pistacho en verde (recién cosechado) a la procesadora")
+st.subheader("Caso base: venta del pistacho seco con cáscara, a precio al productor")
 st.caption(
     "Interfaz sobre el motor (`src/monte_carlo.py`): 120 ha, USD constantes "
     "2026, tasa real, precio AR(1) en niveles calibrado con FRED."
@@ -271,8 +271,10 @@ with st.sidebar:
     escenario = st.selectbox(
         "Escenario de precio", options=ESCENARIOS, index=1,
         help=(
-            "Nivel de precio ancla (USD/kg verde) del proyecto: pesimista "
-            "2,5, base 4 y optimista 6 USD/kg verde (Excel v2, bloque 9). El modelo "
+            "Nivel de precio ancla (USD/kg seco con cáscara, al productor) del "
+            "proyecto: pesimista 5, base 7 y optimista 9 USD/kg seco (Excel v2, "
+            "bloque 6). La finca paga la maquila de pelado y secado (0,40 "
+            "USD/kg seco). La venta en verde queda como alternativa. El modelo "
             "probabilístico que genera la trayectoria de precio alrededor "
             "de ese ancla se elige abajo, en 'Modelo de precio'."
         ),
@@ -305,11 +307,12 @@ with st.sidebar:
         value=_TASA_EXCEL,
         format_func=lambda t: _pct(t, 2),
         help=(
-            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el análisis "
-            "de Sobol del VAN medio (rango 10–18%, superficie fija en 120 ha) "
-            "pesa S_T ≈ 0,07 en el pesimista, 0,11 en el base y 0,24 en el "
-            "optimista. La variable dominante es el nivel del precio en verde "
-            "(S_T ≈ 0,67–0,75 en los tres escenarios)."
+            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el último "
+            "Sobol del VAN medio (caso anterior, venta en verde; rango 10–18%, "
+            "superficie fija en 120 ha) pesa S_T ≈ 0,07 en el pesimista, 0,11 "
+            "en el base y 0,24 en el optimista; la variable dominante es el "
+            "nivel del precio (S_T ≈ 0,67–0,75). Se regenera para el caso seco "
+            "en el Paso 7."
         ),
     )
 
@@ -494,8 +497,8 @@ with tab_fan:
     trayectoria_excel = cargar_modelo_v2().trayectoria_precio(escenario, len(fan))
     primer_año_precio = int(fan.index[np.argmax(trayectoria_excel > 0)])
     paneles = (
-        ("prod", "Producción", "kg/ha", 1.0),
-        ("precio", "Precio de venta en verde", "USD/kg verde (constantes 2026)", 1.0),
+        ("prod", "Producción", "kg secos con cáscara/ha", 1.0),
+        ("precio", "Precio al productor (seco con cáscara)", "USD/kg seco (constantes 2026)", 1.0),
         ("ingreso", "Ingreso bruto anual", "millones USD", 1e6),
         ("van", "VAN neto acumulado", "millones USD", 1e6),
     )
@@ -555,10 +558,11 @@ with tab_sobol:
                 "vivo, así que no reflejan el modelo seleccionado."
             )
         st.info(
-            "Estos índices se pre-calcularon con el caso base del motor "
-            "(venta en verde, 120 ha, traslado de quebrantos, sin activación "
-            "del OPEX pre-productivo, sin estrés climático): no reflejan los "
-            "cambios del sidebar. Se regeneran una sola vez al final, con el "
+            "Estos índices se pre-calcularon con el caso base ANTERIOR (venta "
+            "en verde, 4 USD/kg verde; 120 ha, traslado de quebrantos, sin "
+            "activación del OPEX pre-productivo, sin estrés climático): no "
+            "reflejan el caso base actual (venta en seco) ni los cambios del "
+            "sidebar. Se regeneran una sola vez para el caso seco, con el "
             "precio bayesiano y el tipo de cambio real (ver notas/PLAN_TESIS.md, "
             "Paso 7)."
         )
