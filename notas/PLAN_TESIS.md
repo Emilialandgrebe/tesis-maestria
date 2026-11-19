@@ -2176,6 +2176,15 @@ de OPEX: −118k); TIR real 1,42 %; precio en verde para VAN = 0: 9,52 USD/kg
    120, como `comparar_sensibilidad_ha_fija()`, y `factor_ars` como
    variable nueva). Aprovechar esa corrida para pasar a `n_base = 256`
    (ver "Pendiente para la corrida final: Sobol con n_base = 256").
+4. **Regenerar el Sobol de riesgo con otra métrica.**
+   `data/processed/sobol_indices_riesgo.parquet` es del 2026-11-04 (caso
+   anterior a la venta en verde) y usa P(VAN<0) como métrica. Con venta en
+   verde P(VAN<0) ≈ 100 % en casi todo el espacio de parámetros, así que no
+   discrimina: la varianza de la métrica es casi nula y los índices quedan
+   dominados por ruido. Usar en su lugar el **CVaR 10 %** (promedio del VAN
+   en el 10 % peor de las simulaciones) o el **desvío estándar del VAN**,
+   agregando la métrica a `_METRICAS_VALIDAS` en `src/sensibilidad.py`.
+   Correrlo en la misma pasada que el punto 3.
 
 ---
 

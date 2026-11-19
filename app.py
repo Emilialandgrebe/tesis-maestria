@@ -27,7 +27,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import math
+
 import matplotlib.pyplot as plt
+from matplotlib import ticker
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -84,6 +87,57 @@ def _percentiles_por_año(df: pd.DataFrame, col: str, prefijo: str) -> pd.DataFr
 UMBRAL_PERDIDA_USD = 500_000
 
 
+# ---------------------------------------------------------------------------
+# Formato numérico argentino: punto de miles, coma decimal, signo menos "−"
+# ---------------------------------------------------------------------------
+
+def _num(x: float, dec: int = 0) -> str:
+    """12345.678 -> "12.345,68" (dec=2); negativos con "−"."""
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return "—"
+    texto = f"{abs(x):,.{dec}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"−{texto}" if x < 0 and texto.strip("0,.") else texto
+
+
+def _pct(x: float, dec: int = 1) -> str:
+    """0.6235 -> "62,4%"."""
+    if x is None or (isinstance(x, float) and math.isnan(x)):
+        return "—"
+    return f"{_num(100 * x, dec)}%"
+
+
+def _usd(x: float) -> str:
+    """-2836458 -> "US$ −2.836.458"."""
+    return f"US$ {_num(x, 0)}"
+
+
+def _usd_m(x: float) -> str:
+    """-2836458 -> "US$ −2,84 M"."""
+    return f"US$ {_num(x / 1e6, 2)} M"
+
+
+class _FormatoEjeAR(ticker.Formatter):
+    """Ticks de matplotlib con formato argentino. Los decimales salen del
+    paso entre ticks (p. ej. paso 0,5 -> 1 decimal)."""
+
+    def __call__(self, x, pos=None):
+        locs = [v for v in self.locs if np.isfinite(v)]
+        paso = min((abs(b - a) for a, b in zip(locs, locs[1:]) if b != a), default=1.0)
+        # Menos decimales que representan el paso exacto (2,5 -> 1; 0,25 -> 2).
+        dec = next((d for d in range(5) if abs(round(paso, d) - paso) < paso * 1e-6), 4)
+        return _num(0.0 if abs(x) < paso * 1e-9 else x, dec)
+
+
+def _mostrar(fig, destino=st) -> None:
+    """Aplica el formato argentino a los ejes numéricos y muestra la figura."""
+    for ax in fig.axes:
+        for eje in (ax.xaxis, ax.yaxis):
+            if isinstance(eje.get_major_formatter(), ticker.ScalarFormatter):
+                eje.set_major_formatter(_FormatoEjeAR())
+    fig.tight_layout()
+    destino.pyplot(fig)
+
+
 def _metricas_van(van: np.ndarray, tir: np.ndarray) -> dict:
     """Métricas de resumen de una corrida, compartidas por las pestañas
     Distribución del VAN y Comparar escenarios.
@@ -106,9 +160,9 @@ def _metricas_van(van: np.ndarray, tir: np.ndarray) -> dict:
 
 def _ayuda_tir(n_tir_nan: int, n: int) -> str:
     if n_tir_nan == 0:
-        return f"Mediana de la TIR real. Las {n:,} simulaciones tienen TIR definida."
+        return f"Mediana de la TIR real. Las {_num(n)} simulaciones tienen TIR definida."
     return (
-        f"Mediana de la TIR real. {n_tir_nan:,} de {n:,} simulaciones no tienen "
+        f"Mediana de la TIR real. {_num(n_tir_nan)} de {_num(n)} simulaciones no tienen "
         "TIR definida (no hay tasa entre −99% y 1.000% que anule el VAN) y se "
         "excluyen de la mediana."
     )
@@ -227,13 +281,13 @@ with st.sidebar:
     modo_precio = st.selectbox(
         "Modelo de precio", options=["ar1", "ar1_retornos", "triangular"], index=0,
         format_func=lambda m: {
-            "ar1": "AR(1) en niveles, revierte a la trayectoria (principal)",
+            "ar1": "AR(1) en niveles, revierte al nivel (principal)",
             "ar1_retornos": "AR(1) sobre retornos, sin reversión (estrés)",
             "triangular": "Triangular independiente por año (naive)",
         }[m],
         help=(
             "AR(1) en niveles (default del motor): el precio oscila "
-            "alrededor de la trayectoria del Excel y vuelve a ella (semivida "
+            "alrededor del nivel constante del Excel y vuelve a él (semivida "
             "~4 años), calibrado con la serie real deflactada de FRED "
             "(WPU01190106) -- ver src/precio_estocastico.py. "
             "AR(1) sobre retornos: el desvío no revierte y la dispersión del "
@@ -244,9 +298,12 @@ with st.sidebar:
         ),
     )
 
-    tasa_descuento = st.slider(
-        "Tasa de descuento real", min_value=0.02, max_value=0.25, value=0.1423, step=0.0025,
-        format="%.4f",
+    _TASA_EXCEL = 0.1423
+    tasa_descuento = st.select_slider(
+        "Tasa de descuento real",
+        options=sorted({round(0.02 + 0.0025 * i, 4) for i in range(93)} | {_TASA_EXCEL}),
+        value=_TASA_EXCEL,
+        format_func=lambda t: _pct(t, 2),
         help=(
             "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el análisis "
             "de Sobol del VAN medio (rango 10–18%, superficie fija en 120 ha) "
@@ -312,8 +369,9 @@ with st.sidebar:
 
     st.divider()
 
-    n_simulaciones = st.slider(
-        "Nº de simulaciones", min_value=2000, max_value=10000, value=3000, step=1000,
+    n_simulaciones = st.select_slider(
+        "Nº de simulaciones", options=list(range(2000, 10001, 1000)), value=3000,
+        format_func=_num,
         help="Más iteraciones = menos ruido de muestreo, pero más lento. Subir a 10.000 para precisión.",
     )
 
@@ -350,14 +408,14 @@ with tab_van:
     m = _metricas_van(van, tir)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("VAN medio (año 20)", f"US$ {m['van_medio']:,.0f}")
-    c2.metric("VAN mediano (año 20)", f"US$ {m['van_mediano']:,.0f}")
+    c1.metric("VAN medio (año 20)", _usd_m(m["van_medio"]), help=_usd(m["van_medio"]))
+    c2.metric("VAN mediano (año 20)", _usd_m(m["van_mediano"]), help=_usd(m["van_mediano"]))
     c3.metric(
-        "Probabilidad de VAN negativo", f"{m['prob_van_neg']:.1%}",
+        "Probabilidad de VAN negativo", _pct(m["prob_van_neg"], 1),
         help="Porcentaje de simulaciones en que el proyecto no alcanza la tasa exigida.",
     )
     c4.metric(
-        "TIR mediana", f"{m['tir_mediana']:.2%}",
+        "TIR mediana", _pct(m["tir_mediana"], 2),
         help=_ayuda_tir(m["n_tir_nan"], len(tir)),
     )
 
@@ -367,20 +425,20 @@ with tab_van:
         "P50": p50,
         "P90": p90,
         "P95": p95,
-        f"P(pérdida > US$ {UMBRAL_PERDIDA_USD:,.0f})": m["prob_perdida_grande"],
+        f"P(pérdida > {_usd(UMBRAL_PERDIDA_USD)})": m["prob_perdida_grande"],
         "CVaR 10% (VAN medio del 10% peor)": m["cvar_10"],
     }])
     columnas_usd = [c for c in tabla_riesgo.columns if not c.startswith("P(pérdida")]
     st.dataframe(
         tabla_riesgo.style.format(
-            {**{c: "US$ {:,.0f}" for c in columnas_usd}, tabla_riesgo.columns[5]: "{:.1%}"}
+            {**{c: _usd for c in columnas_usd}, tabla_riesgo.columns[5]: _pct}
         ),
         use_container_width=True,
         hide_index=True,
     )
     st.caption(
         "Percentiles del VAN al año 20. Pérdida = VAN por debajo de "
-        f"−US\\$ {UMBRAL_PERDIDA_USD:,.0f}. CVaR 10%: promedio del VAN en el "
+        f"−US\\$ {_num(UMBRAL_PERDIDA_USD)}. CVaR 10%: promedio del VAN en el "
         "10% de simulaciones con peor resultado."
     )
 
@@ -401,10 +459,9 @@ with tab_van:
     ax.set_ylabel("Frecuencia")
     ax.set_title(
         f"Distribución del VAN — {escenario}, {hectareas} ha, "
-        f"tasa {tasa_descuento:.1%}, N={n_simulaciones:,}"
+        f"tasa {_pct(tasa_descuento, 2)}, N={_num(n_simulaciones)}"
     )
-    fig.tight_layout()
-    st.pyplot(fig)
+    _mostrar(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +487,7 @@ def _fan_chart(
 with tab_fan:
     st.caption(
         "Banda P10–P90 y mediana P50 por año, sobre las "
-        f"{n_simulaciones:,} simulaciones del escenario **{escenario}**. "
+        f"{_num(n_simulaciones)} simulaciones del escenario **{escenario}**. "
         "El VAN es acumulado y descontado; producción, precio e ingreso son anuales."
     )
     fan = res["fan"]
@@ -459,8 +516,7 @@ with tab_fan:
             if prefijo == "van":
                 ax.axhline(0, color="black", linewidth=1.0, alpha=0.6)
             ax.legend(fontsize=8)
-            fig.tight_layout()
-            columna.pyplot(fig)
+            _mostrar(fig, columna)
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +571,7 @@ with tab_sobol:
         )
         ax.set_xlabel("Índice de Sobol total (ST)")
         ax.set_title(f"Sensibilidad del VAN medio — escenario {esc_sobol}{nota}")
-        fig.tight_layout()
-        st.pyplot(fig)
+        _mostrar(fig)
 
         tabla_sobol = (
             sub.assign(parametro=etiquetas)
@@ -530,7 +585,7 @@ with tab_sobol:
             })
         )
         st.dataframe(
-            tabla_sobol.style.format("{:.3f}", subset=tabla_sobol.columns[1:]),
+            tabla_sobol.style.format(lambda v: _num(v, 3), subset=tabla_sobol.columns[1:]),
             use_container_width=True,
             hide_index=True,
         )
@@ -543,13 +598,13 @@ with tab_sobol:
 with tab_cmp:
     st.caption(
         f"Los tres escenarios de precio a los parámetros actuales del sidebar "
-        f"({hectareas} ha, tasa {tasa_descuento:.1%}, "
+        f"({_num(hectareas)} ha, tasa {_pct(tasa_descuento, 2)}, "
         f"OPEX {'estocástico' if capex_opex_estocastico else 'fijo'}, "
         f"modelo de precio {_NOMBRE_PRECIO[modo_precio]}, "
         f"{'con' if quebrantos else 'sin'} traslado de quebrantos, "
         f"{'con' if activar_opex_pre else 'sin'} activación del OPEX pre-productivo, "
         f"estrés climático: {estres_etiqueta}, "
-        f"N={n_simulaciones:,}). Cada corrida se cachea por separado."
+        f"N={_num(n_simulaciones)}). Cada corrida se cachea por separado."
     )
     with st.spinner("Corriendo los tres escenarios…"):
         cmp = {e: simular(escenario=e, **_args_comunes) for e in ESCENARIOS}
@@ -567,11 +622,10 @@ with tab_cmp:
     ax.set_ylabel("Densidad")
     ax.set_title("VAN por escenario de precio (líneas punteadas = media)")
     ax.legend()
-    fig.tight_layout()
-    st.pyplot(fig)
+    _mostrar(fig)
 
     metricas_cmp = {e: _metricas_van(cmp[e]["van"], cmp[e]["tir"]) for e in ESCENARIOS}
-    col_perdida = f"P(pérdida > US$ {UMBRAL_PERDIDA_USD:,.0f})"
+    col_perdida = f"P(pérdida > {_usd(UMBRAL_PERDIDA_USD)})"
     tabla = pd.DataFrame(
         {
             "Escenario": ESCENARIOS,
@@ -587,13 +641,13 @@ with tab_cmp:
     st.dataframe(
         tabla.style.format(
             {
-                "VAN medio (USD)": "{:,.0f}",
-                "VAN mediano (USD)": "{:,.0f}",
-                "Probabilidad de VAN negativo": "{:.1%}",
-                col_perdida: "{:.1%}",
-                "CVaR 10% (USD)": "{:,.0f}",
-                "TIR mediana": "{:.2%}",
-                "Sin TIR definida": "{:,d}",
+                "VAN medio (USD)": _num,
+                "VAN mediano (USD)": _num,
+                "Probabilidad de VAN negativo": _pct,
+                col_perdida: _pct,
+                "CVaR 10% (USD)": _num,
+                "TIR mediana": lambda v: _pct(v, 2),
+                "Sin TIR definida": _num,
             }
         ),
         use_container_width=True,
