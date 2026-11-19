@@ -7,6 +7,15 @@ es el único punto del motor que lee esos archivos: `src/costos.py`,
 CAPEX, OPEX y las series anuales (curva de rendimiento, precios por
 escenario, rampa de fertilización).
 
+Hay dos juegos de precios por escenario, planos en los años 7-20, en USD
+constantes 2026:
+
+- en VERDE (Supuestos, bloque 9; caso base, venta_verde = 1): lo que paga
+  la procesadora por kg verde recién cosechado, 2,5 / 4 / 6 USD/kg;
+- de MERCADO del producto procesado (seco con cáscara, bloque 6): 6 / 8 /
+  10 USD/kg, que se usan con venta_verde = 0 junto con la conversión y el
+  precio al productor del bloque 8 (`src/costos.py`).
+
 Todas las series anuales se devuelven indexadas por año del proyecto 1..20
 (el año 0 del Excel solo tiene CAPEX, que el motor maneja aparte).
 """
@@ -26,6 +35,15 @@ _COLUMNA_PRECIO = {
     "pesimista": "precio_pesimista_usd_kg",
     "base": "precio_base_usd_kg",
     "optimista": "precio_optimista_usd_kg",
+    # Trayectoria creciente del plan original (8 -> 11,5 USD/kg). Solo
+    # referencia: ningún caller la usa por defecto; sirve para reproducir el
+    # plan original (tests/test_consistencia_excel.py).
+    "plan_original": "precio_plan_original_usd_kg",
+}
+_COLUMNA_PRECIO_VERDE = {
+    "pesimista": "precio_verde_pesimista_usd_kg",
+    "base": "precio_verde_base_usd_kg",
+    "optimista": "precio_verde_optimista_usd_kg",
 }
 
 
@@ -57,11 +75,31 @@ class ModeloV2:
         """% de plena producción por año, tal cual el Excel (vecería incluida)."""
         return self.serie("rendimiento_pct_plena", n_años)
 
-    def trayectoria_precio(self, escenario: str, n_años: int) -> np.ndarray:
-        """Precio USD/kg (USD constantes 2026) por año para un escenario."""
-        if escenario not in _COLUMNA_PRECIO:
-            raise ValueError(f"escenario debe ser uno de {list(_COLUMNA_PRECIO)}, recibido {escenario!r}")
-        return self.serie(_COLUMNA_PRECIO[escenario], n_años)
+    @property
+    def venta_verde(self) -> bool:
+        """Caso base del Excel (Supuestos!B78): True = venta en verde."""
+        return bool(self.supuestos["venta_verde"])
+
+    def trayectoria_precio(
+        self, escenario: str, n_años: int, venta_verde: bool | None = None
+    ) -> np.ndarray:
+        """Precio de referencia por año (USD constantes 2026).
+
+        `venta_verde=True`: precio en verde, USD/kg verde (bloque 9).
+        `venta_verde=False`: precio de mercado del procesado, USD/kg seco
+        (bloque 6). None (default) sigue el caso base del Excel (B78).
+        `escenario`: "pesimista", "base", "optimista" o, solo con precio de
+        mercado, "plan_original" (trayectoria vieja, solo referencia).
+        """
+        if venta_verde is None:
+            venta_verde = self.venta_verde
+        columnas = _COLUMNA_PRECIO_VERDE if venta_verde else _COLUMNA_PRECIO
+        if escenario not in columnas:
+            base = "en verde" if venta_verde else "de mercado"
+            raise ValueError(
+                f"escenario con precio {base} debe ser uno de {list(columnas)}, recibido {escenario!r}"
+            )
+        return self.serie(columnas[escenario], n_años)
 
     def rampa_fertilizacion(self, n_años: int) -> np.ndarray:
         """Fracción de la dosis plena de fertilización/fitosanidad por año."""

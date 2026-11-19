@@ -1,26 +1,38 @@
 """Consistencia del motor con el modelo financiero v2 (Excel).
 
 La corrida determinística del motor (`ParametrosMC(deterministico=True)`:
-curva y precios del Excel, sin clima, vecería simulada ni ruido de OPEX) en
-el escenario base a 120 ha tiene que reproducir el VAN y la TIR real de la
-hoja Flujo del Excel con una diferencia relativa menor al 1%, en las cuatro
-combinaciones de los dos interruptores fiscales de Supuestos, bloque 7:
+curva y precios del Excel, sin clima, vecería simulada ni ruido de OPEX) a
+120 ha tiene que reproducir el VAN y la TIR real de la hoja Flujo del Excel.
 
-- B64, traslado de quebrantos (`ParametrosCostos.quebrantos`), y
-- B66, activación del OPEX pre-productivo como costo de implantación
-  (`ParametrosCostos.activar_opex_pre`, vida útil B67 = 20 años).
-
-El Excel está guardado en el caso base (B64 = 1, B66 = 0), que es también
-el default del motor. Para ese caso la referencia sale de
+Caso base del Excel (como está guardado): venta en verde a la procesadora
+(Supuestos bloque 9, B78 = 1; `ParametrosCostos.venta_verde`), ingreso =
+kg verdes x precio en verde (planos 2,5 / 4 / 6 USD/kg verde), sin
+conversión ni maquila; quebrantos sí, activación no. VAN base
+-2.836.458,08, pesimista -3.713.633,54 y optimista -1.788.373,93
+(tolerancia relativa 1e-6). La referencia del base sale de
 `data/modelo_v2/referencia_indicadores.csv` y `referencia_flujo.csv`
-(exportados por `scripts/importar_modelo_v2.py`). El último test verifica
-que esos CSV sigan sincronizados con el .xlsx: si alguien edita el Excel sin
-volver a correr el importador, falla.
+(exportados por `scripts/importar_modelo_v2.py`).
 
-El .xlsx guarda solo los valores calculados en el caso base, así que las
-otras tres combinaciones están fijadas abajo (`REFERENCIAS`), tomadas del
-Excel recalculado con cada posición de B64 y B66. Si cambia el Excel, hay
-que volver a tomarlas.
+Venta en seco (venta_verde = 0, bloque 8): precios de mercado planos (8
+USD/kg), conversión B71 = 0,50 y precio al productor B73 = 0,50 con sus
+interruptores encendidos: VAN -4.170.792,47.
+
+Plan original: venta_verde = 0, los dos interruptores del bloque 8
+apagados y la
+trayectoria de precio creciente del plan original (Supuestos fila 58,
+escenario "plan_original"). Ahí se verifican las cuatro combinaciones de
+los dos interruptores fiscales de Supuestos, bloque 7:
+
+- B65, traslado de quebrantos (`ParametrosCostos.quebrantos`), y
+- B67, activación del OPEX pre-productivo como costo de implantación
+  (`ParametrosCostos.activar_opex_pre`, vida útil B68 = 20 años).
+
+con los valores fijados en `REFERENCIAS` (tomados del Excel recalculado con
+cada posición de B65 y B67, antes del bloque 8). El caso base fiscal (VAN
+-67.345,99, TIR 14,0464%) se verifica además con tolerancia estricta.
+
+El último test verifica que los CSV sigan sincronizados con el .xlsx: si
+alguien edita el Excel sin volver a correr el importador, falla.
 """
 
 from __future__ import annotations
@@ -40,6 +52,7 @@ from src.costos import ParametrosCostos  # noqa: E402
 from src.modelo_v2 import DIR_MODELO_V2, cargar_modelo_v2  # noqa: E402
 from src.monte_carlo import (  # noqa: E402
     ParametrosMC,
+    precio_equilibrio,
     resumen_financiero,
     run_monte_carlo,
     run_monte_carlo_antitetico,
@@ -50,11 +63,24 @@ TOLERANCIA_RELATIVA = 0.01
 
 _RUNNERS = [run_monte_carlo, run_monte_carlo_antitetico, run_monte_carlo_precio_historico]
 
+# Caso base del Excel: venta en verde (Resumen!B5 con Supuestos!B22 = 1/2/3).
+# Si cambian los precios en verde (bloque 9), hay que volver a tomarlos.
+VAN_VENTA_VERDE_USD = {
+    "pesimista": -3_713_633.54,
+    "base": -2_836_458.08,
+    "optimista": -1_788_373.93,
+}
+# venta_verde = 0, escenario base: bloque 8 con conversión y proporción
+# (B71/B73, sin validar). Si se actualizan esos valores, cambia.
+VAN_VENTA_SECO_USD = -4_170_792.47
+TOLERANCIA_ESTRICTA_RELATIVA = 1e-6
+
+# PLAN ORIGINAL (bloque 8 apagado, trayectoria de precio creciente):
 # (quebrantos, activar_opex_pre) -> Flujo!B5, Flujo!B6 y Flujo!32 (=
 # Quebrantos!55; año -> quebranto utilizado, el resto de los años cero).
-# Escenario base, 120 ha, plazo de quebrantos 5 años, vida útil 20 años.
+# 120 ha, plazo de quebrantos 5 años, vida útil 20 años.
 REFERENCIAS = {
-    (True, False): {  # caso base del Excel
+    (True, False): {  # caso base fiscal
         "van_usd": -67_345.99, "tir_real": 0.140464,
         "quebrantos_utilizados_usd": {8: 471_852.0, 9: 1_524_451.0, 10: 267_989.0},
     },
@@ -104,15 +130,25 @@ def _corrida_deterministica(
     n_simulaciones: int = 2,
     quebrantos: bool = True,
     activar_opex_pre: bool = False,
+    plan_original: bool = False,
+    venta_verde: bool = True,
+    escenario: str = "base",
 ):
+    """Default: caso base del Excel (venta en verde). `venta_verde=False`:
+    bloque 8 (kg secos, precio al productor). `plan_original=True`:
+    venta_verde = 0, bloque 8 apagado y trayectoria de precio vieja."""
+    if plan_original:
+        venta_verde, escenario = False, "plan_original"
     params = ParametrosMC(
         n_simulaciones=n_simulaciones,
         hectareas=120.0,
-        escenario="base",
+        escenario=escenario,
         deterministico=True,
     )
     costos = ParametrosCostos(
-        hectareas=120.0, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
+        hectareas=120.0, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre,
+        venta_verde=venta_verde,
+        convertir_a_seco=not plan_original, precio_al_productor=not plan_original,
     )
     df = runner(params, costos)
     return df, resumen_financiero(df, costos), costos
@@ -139,18 +175,149 @@ def test_interruptores_fiscales_coinciden_con_excel():
     assert defaults.vida_util_implantacion == supuestos["vida_util_implantacion"] == 20
 
 
+def test_base_de_ingresos_coincide_con_excel():
+    """Bloque 8: el Excel está guardado con precio al productor (B72 = 1),
+    y los defaults del motor (interruptores encendidos, conversión y
+    proporción) son los del Excel."""
+    supuestos = cargar_modelo_v2().supuestos
+    assert supuestos["precio_al_productor"] == 1
+    assert supuestos["venta_verde"] == 1
+    defaults = ParametrosCostos()
+    assert defaults.venta_verde is True
+    assert defaults.convertir_a_seco is True
+    assert defaults.precio_al_productor is True
+    assert defaults.factor_conversion_seco == supuestos["factor_conversion_seco"]
+    assert defaults.proporcion_precio_productor == supuestos["proporcion_precio_productor"]
+
+
+def test_interruptores_apagados_reproducen_plan_original():
+    apagados = ParametrosCostos(
+        venta_verde=False, convertir_a_seco=False, precio_al_productor=False
+    )
+    assert apagados.factor_kg_vendidos == 1.0
+    assert apagados.factor_precio_recibido == 1.0
+
+
+def test_venta_verde_sin_conversion_ni_maquila():
+    """Con venta en verde no se aplican conversión, proporción ni maquila,
+    aunque los interruptores del bloque 8 estén encendidos."""
+    verde = ParametrosCostos(venta_verde=True)
+    assert verde.factor_kg_vendidos == 1.0
+    assert verde.factor_precio_recibido == 1.0
+    assert verde.costo_por_kg == 0.0
+    seco = ParametrosCostos(venta_verde=False)
+    assert seco.factor_kg_vendidos == seco.factor_conversion_seco
+    assert seco.factor_precio_recibido == seco.proporcion_precio_productor
+    assert seco.costo_por_kg == pytest.approx(0.4)
+
+
 def test_caso_base_fijado_coincide_con_csv(referencia):
     """La referencia fijada del caso base es la que guarda el .xlsx."""
-    base = REFERENCIAS[(True, False)]
-    assert referencia["van_usd"] == pytest.approx(base["van_usd"], abs=0.01)
-    assert referencia["tir_real"] == pytest.approx(base["tir_real"], abs=1e-6)
+    assert referencia["van_usd"] == pytest.approx(
+        VAN_VENTA_VERDE_USD["base"], rel=TOLERANCIA_ESTRICTA_RELATIVA
+    )
+
+
+@pytest.mark.parametrize("escenario", list(VAN_VENTA_VERDE_USD))
+@pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
+def test_van_venta_verde_coincide_con_excel(runner, escenario):
+    """Caso base (venta en verde) en los tres escenarios: VAN del Excel
+    con tolerancia relativa 1e-6."""
+    _, resumen, _ = _corrida_deterministica(runner, escenario=escenario)
+    for van in resumen["van_neto_usd"]:
+        assert van == pytest.approx(
+            VAN_VENTA_VERDE_USD[escenario], rel=TOLERANCIA_ESTRICTA_RELATIVA
+        )
+
+
+@pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
+def test_tir_caso_base_coincide_con_excel(runner, referencia):
+    _, resumen, _ = _corrida_deterministica(runner)
+    for tir in resumen["tir"]:
+        assert tir == pytest.approx(referencia["tir_real"], abs=1e-6)
+
+
+@pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
+def test_van_venta_seco_coincide_con_excel(runner):
+    """venta_verde = 0 con el bloque 8 encendido, escenario base: VAN del
+    Excel con tolerancia relativa 1e-6."""
+    _, resumen, _ = _corrida_deterministica(runner, venta_verde=False)
+    for van in resumen["van_neto_usd"]:
+        assert van == pytest.approx(VAN_VENTA_SECO_USD, rel=TOLERANCIA_ESTRICTA_RELATIVA)
+
+
+@pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
+def test_plan_original_caso_base_fiscal_estricto(runner):
+    """venta_verde = 0, interruptores del bloque 8 apagados y trayectoria
+    vieja: VAN -67.345,99 y TIR 14,0464% (caso base fiscal antes del
+    bloque 8)."""
+    _, resumen, _ = _corrida_deterministica(runner, plan_original=True)
+    for van, tir in zip(resumen["van_neto_usd"], resumen["tir"]):
+        assert van == pytest.approx(-67_345.99, abs=0.01)
+        assert tir == pytest.approx(0.140464, abs=1e-6)
+
+
+def test_precio_equilibrio_coincide_con_excel(referencia):
+    """Flujo!B11: OPEX del año 12 / kg vendidos del año 12 (kg verdes en
+    el caso base), en USD por kg vendido."""
+    df, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    assert precio_equilibrio(df, 12).iloc[0] == pytest.approx(
+        referencia["precio_equilibrio_anio12_usd_kg_vendido"], rel=TOLERANCIA_ESTRICTA_RELATIVA
+    )
+
+
+def test_kilos_y_precio_coinciden_con_produccion_excel():
+    """Año 12 del Excel (hoja Producción, 324.000 kg verdes). Venta en
+    verde: se venden los 324.000 kg a 4 USD/kg verde, ingresos 1.296.000.
+    Venta en seco: 162.000 kg secos, 8 USD/kg de mercado -> 4 recibidos,
+    ingresos 648.000."""
+    verde, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    año12 = verde.set_index("año").loc[12]
+    assert año12["rendimiento_kg_ha"] * 120 == pytest.approx(324_000)
+    assert año12["produccion_kg_vendidos"] == pytest.approx(324_000)
+    assert año12["precio_usd_kg"] == pytest.approx(4.0)
+    assert año12["ingreso_usd"] == pytest.approx(1_296_000)
+
+    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=False)
+    año12 = seco.set_index("año").loc[12]
+    assert año12["produccion_kg_vendidos"] == pytest.approx(162_000)
+    assert año12["precio_usd_kg"] == pytest.approx(8.0)
+    assert año12["ingreso_usd"] == pytest.approx(648_000)
+
+
+def test_maquila_cero_en_venta_verde():
+    """OPEX!49 x IF(venta_verde=1, 0, 1): el OPEX con venta en verde es el
+    de venta en seco menos la maquila (0,40 x kg secos) y menos el IIBB
+    sobre la diferencia de ventas."""
+    verde, _, costos = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=False)
+    verde, seco = verde.set_index("año"), seco.set_index("año")
+    esperado = (
+        seco["opex_usd"]
+        - 0.4 * seco["produccion_kg_vendidos"]
+        + costos.alicuota_iibb * (verde["ingreso_usd"] - seco["ingreso_usd"])
+    )
+    np.testing.assert_allclose(verde["opex_usd"], esperado, rtol=1e-12, atol=1e-6)
+
+
+def test_precio_params_incoherente_con_costos_falla():
+    """Pasar un AR(1) con la otra base de precio que `costos` es un error,
+    no una mezcla silenciosa."""
+    from src.precio_estocastico import ParametrosPrecioAR1
+
+    with pytest.raises(ValueError):
+        run_monte_carlo(
+            ParametrosMC(n_simulaciones=4),
+            ParametrosCostos(venta_verde=True),
+            ParametrosPrecioAR1(venta_verde=False),
+        )
 
 
 @_COMBINACIONES
 @pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
 def test_van_coincide_con_excel(runner, quebrantos, activar_opex_pre):
     _, resumen, _ = _corrida_deterministica(
-        runner, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
+        runner, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre, plan_original=True
     )
     van_excel = REFERENCIAS[(quebrantos, activar_opex_pre)]["van_usd"]
     for van in resumen["van_neto_usd"]:
@@ -163,7 +330,7 @@ def test_van_coincide_con_excel(runner, quebrantos, activar_opex_pre):
 @pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
 def test_tir_coincide_con_excel(runner, quebrantos, activar_opex_pre):
     _, resumen, _ = _corrida_deterministica(
-        runner, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
+        runner, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre, plan_original=True
     )
     tir_excel = REFERENCIAS[(quebrantos, activar_opex_pre)]["tir_real"]
     for tir in resumen["tir"]:
@@ -193,7 +360,8 @@ def test_capex_coincide_con_excel(referencia):
     ],
 )
 def test_flujo_anual_coincide_con_excel(columna_motor, columna_excel, flujo_referencia):
-    """Año por año (1-20), en el caso base, para ubicar en qué rubro está
+    """Año por año (1-20), en el caso base del Excel actual (base seca y
+    precio al productor), para ubicar en qué rubro está
     una diferencia si el VAN deja de coincidir. Tolerancia relativa al mayor
     valor de la serie (o absoluta de 1 USD si la serie es toda cero, como
     las filas de activación con el interruptor apagado)."""
@@ -209,7 +377,8 @@ def test_flujo_anual_coincide_con_excel(columna_motor, columna_excel, flujo_refe
 
 @_COMBINACIONES
 def test_quebrantos_utilizados_por_año(quebrantos, activar_opex_pre):
-    """Fila Flujo!32 en cada combinación. En el caso base, quebrantos en los
+    """Fila Flujo!32 en cada combinación, con el plan original. En el caso
+    base fiscal, quebrantos en los
     años 8, 9 y 10: las pérdidas de los años 1-2 vencen sin usarse, y
     también ~21k de la del año 3 (vence en el año 8, que solo tiene 472k de
     base positiva); las de los años 4-7 se consumen en los años 9 y 10. Con
@@ -217,7 +386,7 @@ def test_quebrantos_utilizados_por_año(quebrantos, activar_opex_pre):
     (el OPEX no se deduce) y solo se usan en los años 8 y 9."""
     df, _, _ = _corrida_deterministica(
         run_monte_carlo, n_simulaciones=1,
-        quebrantos=quebrantos, activar_opex_pre=activar_opex_pre,
+        quebrantos=quebrantos, activar_opex_pre=activar_opex_pre, plan_original=True,
     )
     motor = df.set_index("año")["quebrantos_utilizados_usd"]
     esperado = pd.Series(0.0, index=motor.index)

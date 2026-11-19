@@ -613,15 +613,21 @@ def _combinar_factores(
 
 
 def _fijar_precio(
-    params: ParametrosMC, prices: np.ndarray, precio_params: ParametrosPrecioAR1 | None
+    params: ParametrosMC,
+    prices: np.ndarray,
+    precio_params: ParametrosPrecioAR1 | None,
+    trayectoria_excel: np.ndarray | None = None,
 ) -> np.ndarray:
     """Si "precio" está en `params.fuentes_fijas`, reemplaza los precios
     simulados por la trayectoria base: la de `precio_params` si la trae, si
-    no la del Excel del escenario."""
+    no la del Excel del escenario (`trayectoria_excel`, con la base de
+    precio del motor)."""
     if "precio" not in params.fuentes_fijas:
         return prices
     if precio_params is not None and params.modo_precio == "ar1":
         trayectoria = precio_params.trayectoria_base(params.n_años)
+    elif trayectoria_excel is not None:
+        trayectoria = trayectoria_excel
     else:
         trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     return np.broadcast_to(trayectoria, prices.shape).copy()
@@ -756,18 +762,24 @@ def simulate_yields_antitetico(params: ParametrosMC, rng: np.random.Generator) -
     )
 
 
-def simulate_prices_antitetico(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
+def simulate_prices_antitetico(
+    params: ParametrosMC,
+    rng: np.random.Generator,
+    trayectoria: np.ndarray | None = None,
+) -> np.ndarray:
     """
     Versión de `simulate_prices()` con reducción de varianza por variables
     antitéticas: transforma uniformes antitéticos vía la PPF de la
     distribución triangular (scipy.stats.triang) en vez de `rng.triangular`.
+    `trayectoria`: ver `simulate_prices()`.
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
-    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    if trayectoria is None:
+        trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     u = _generar_uniformes_antiteticos(params.n_simulaciones, (params.n_años,), rng)
     c = (mode - low) / (high - low)  # parámetro de forma de scipy.stats.triang
     return trayectoria.reshape(1, -1) * triang_dist.ppf(u, c, loc=low, scale=high - low)
@@ -864,26 +876,65 @@ def simulate_yields(params: ParametrosMC, rng: np.random.Generator) -> np.ndarra
     )
 
 
-def simulate_prices(params: ParametrosMC, rng: np.random.Generator) -> np.ndarray:
+def simulate_prices(
+    params: ParametrosMC,
+    rng: np.random.Generator,
+    trayectoria: np.ndarray | None = None,
+) -> np.ndarray:
     """
     Simula el precio de venta en USD/kg: trayectoria del Excel por un
     multiplicador triangular independiente por año (ver ESCENARIOS_PRECIO).
+    `trayectoria` (n_años,): la del motor según `venta_verde`; None usa la
+    del escenario con la base del caso base del Excel.
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
     low, mode, high = ESCENARIOS_PRECIO[params.escenario]
-    trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
+    if trayectoria is None:
+        trayectoria = _MODELO.trayectoria_precio(params.escenario, params.n_años)
     return trayectoria.reshape(1, -1) * rng.triangular(
         low, mode, high, (params.n_simulaciones, params.n_años)
     )
+
+
+def _trayectoria_referencia(params: ParametrosMC, costos: ParametrosCostos) -> np.ndarray:
+    """Trayectoria de precio del Excel del escenario, en verde o de mercado
+    según `costos.venta_verde`."""
+    return _MODELO.trayectoria_precio(
+        params.escenario, params.n_años, venta_verde=costos.venta_verde
+    )
+
+
+def _resolver_precio_params(
+    params: ParametrosMC,
+    costos: ParametrosCostos,
+    precio_params: ParametrosPrecioAR1 | None,
+) -> ParametrosPrecioAR1:
+    """
+    `precio_params` con la base de precio (en verde / de mercado) fijada
+    desde `costos.venta_verde`: None -> AR(1) del escenario de `params`;
+    `venta_verde=None` -> se completa; distinta de la de `costos` -> error
+    (ingresos con una base y precios con la otra).
+    """
+    if precio_params is None:
+        return ParametrosPrecioAR1(escenario=params.escenario, venta_verde=costos.venta_verde)
+    if precio_params.venta_verde is None:
+        return replace(precio_params, venta_verde=costos.venta_verde)
+    if precio_params.venta_verde != costos.venta_verde:
+        raise ValueError(
+            f"precio_params.venta_verde={precio_params.venta_verde} no coincide con "
+            f"costos.venta_verde={costos.venta_verde}"
+        )
+    return precio_params
 
 
 def _despachar_precios(
     params: ParametrosMC,
     rng: np.random.Generator,
     precio_params: ParametrosPrecioAR1 | None,
+    trayectoria: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Despacha al generador de precio según `params.modo_precio` -- mismo
@@ -902,7 +953,7 @@ def _despachar_precios(
             precio_params = ParametrosPrecioAR1(escenario=params.escenario)
         return simulate_prices_ar1(params.n_simulaciones, params.n_años, precio_params, rng)
     if params.modo_precio == "triangular":
-        return simulate_prices(params, rng)
+        return simulate_prices(params, rng, trayectoria)
     raise ValueError(
         f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
     )
@@ -912,6 +963,7 @@ def _despachar_precios_antitetico(
     params: ParametrosMC,
     rng: np.random.Generator,
     precio_params: ParametrosPrecioAR1 | None,
+    trayectoria: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Versión de `_despachar_precios()` con reducción de varianza por
@@ -926,7 +978,7 @@ def _despachar_precios_antitetico(
             params.n_simulaciones, params.n_años, precio_params, rng
         )
     if params.modo_precio == "triangular":
-        return simulate_prices_antitetico(params, rng)
+        return simulate_prices_antitetico(params, rng, trayectoria)
     raise ValueError(
         f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
     )
@@ -936,15 +988,23 @@ def simulate_revenue(
     yields_kg_ha: np.ndarray,
     prices_usd_kg: np.ndarray,
     hectareas: float,
+    costos: ParametrosCostos,
 ) -> np.ndarray:
     """
-    Calcula los ingresos brutos en USD: rendimiento × precio × superficie.
+    Ingresos brutos en USD (Producción!11 del Excel):
+
+        kg verdes/ha × superficie × factor kg vendidos × precio de referencia × factor precio recibido
+
+    `yields_kg_ha` está en kg VERDES. Con `costos.venta_verde` (caso base)
+    los dos factores valen 1 y `prices_usd_kg` es el precio en verde; si no,
+    es el precio de MERCADO del procesado y los factores son la conversión
+    y la proporción del bloque 8 (con sus interruptores).
 
     Retorna
     -------
     np.ndarray de forma (n_simulaciones, n_años).
     """
-    return yields_kg_ha * prices_usd_kg * hectareas
+    return costos.kg_vendidos(yields_kg_ha * hectareas) * costos.precio_recibido(prices_usd_kg)
 
 
 # ---------------------------------------------------------------------------
@@ -1098,15 +1158,16 @@ def simulate_opex_multiplicador_antitetico(
 
 
 def _componentes_deterministicos(
-    params: ParametrosMC,
+    params: ParametrosMC, costos: ParametrosCostos
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     (yields, prices, capex_extra, opex_multiplicador) del modo determinístico
-    -- ver `ParametrosMC.deterministico`. No consume `rng`.
+    -- ver `ParametrosMC.deterministico`. No consume `rng`. El precio es la
+    trayectoria del Excel en verde o de mercado según `costos.venta_verde`.
     """
     n, T = params.n_simulaciones, params.n_años
     curva = np.array([CURVA_EXCEL[a] for a in range(1, T + 1)]) * RENDIMIENTO_VALIDADO_KG_HA
-    trayectoria = _MODELO.trayectoria_precio(params.escenario, T)
+    trayectoria = _trayectoria_referencia(params, costos)
     return (
         np.tile(curva, (n, 1)),
         np.tile(trayectoria, (n, 1)),
@@ -1162,9 +1223,11 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
-    produccion_kg = yields * params.hectareas
-    revenue = simulate_revenue(yields, prices, params.hectareas)
-    opex = opex_total(produccion_kg, revenue, costos, opex_multiplicador)
+    # Rendimiento en kg verdes; ingresos y maquila sobre kg vendidos (verdes
+    # en venta en verde, secos con el bloque 8).
+    produccion_kg_vendidos = costos.kg_vendidos(yields * params.hectareas)
+    revenue = simulate_revenue(yields, prices, params.hectareas, costos)
+    opex = opex_total(produccion_kg_vendidos, revenue, costos, opex_multiplicador)
     flujo = flujo_caja_neto(revenue, opex, costos)
     flujo_neto = flujo["flujo_neto"]
 
@@ -1178,8 +1241,9 @@ def _orquestar_resultado(
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
-        "rendimiento_kg_ha": yields.ravel(),
-        "precio_usd_kg":    prices.ravel(),
+        "rendimiento_kg_ha": yields.ravel(),  # kg verdes / ha
+        "produccion_kg_vendidos": produccion_kg_vendidos.ravel(),
+        "precio_usd_kg":    prices.ravel(),  # precio de referencia (verde o mercado)
         "ingreso_usd":      revenue.ravel(),
         "opex_usd":         opex.ravel(),
         "ebitda_usd":       flujo["ebitda"].ravel(),
@@ -1226,7 +1290,9 @@ def run_monte_carlo(
         sincroniza automáticamente (se pisa `costos.hectareas`).
     precio_params : ParametrosPrecioAR1, opcional
         Solo tiene efecto con `params.modo_precio="ar1"`. Si es None se arma
-        con `ParametrosPrecioAR1(escenario=params.escenario)`.
+        con `ParametrosPrecioAR1(escenario=params.escenario)`. La base de
+        precio (en verde / de mercado) la fija `costos.venta_verde` -- ver
+        `_resolver_precio_params()`.
 
     Retorna
     -------
@@ -1241,13 +1307,18 @@ def run_monte_carlo(
     """
     params, costos = _resolver_params_costos(params, costos)
     if params.deterministico:
-        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params, costos)
         return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
     _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
+    precio_params = _resolver_precio_params(params, costos, precio_params)
+    trayectoria = _trayectoria_referencia(params, costos)
 
     yields = simulate_yields(params, rng)
-    prices = _fijar_precio(params, _despachar_precios(params, rng, precio_params), precio_params)
+    prices = _fijar_precio(
+        params, _despachar_precios(params, rng, precio_params, trayectoria),
+        precio_params, trayectoria,
+    )
     capex_extra = simulate_capex_extra(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
@@ -1278,14 +1349,17 @@ def run_monte_carlo_antitetico(
     """
     params, costos = _resolver_params_costos(params, costos)
     if params.deterministico:
-        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params)
+        yields, prices, capex_extra, opex_mult = _componentes_deterministicos(params, costos)
         return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
     _validar_fuentes_fijas(params)
     rng = np.random.default_rng(params.semilla)
+    precio_params = _resolver_precio_params(params, costos, precio_params)
+    trayectoria = _trayectoria_referencia(params, costos)
 
     yields = simulate_yields_antitetico(params, rng)
     prices = _fijar_precio(
-        params, _despachar_precios_antitetico(params, rng, precio_params), precio_params
+        params, _despachar_precios_antitetico(params, rng, precio_params, trayectoria),
+        precio_params, trayectoria,
     )
     capex_extra = simulate_capex_extra_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
@@ -1377,6 +1451,19 @@ def _tir_vectorizada(
         if np.sign(van_fila(a)) != np.sign(van_fila(b)):
             r[i] = brentq(van_fila, a, b, xtol=tol)
     return r
+
+
+def precio_equilibrio(df: pd.DataFrame, año: int = 12) -> pd.Series:
+    """
+    Precio de equilibrio del `año` por simulación, en USD por kg VENDIDO
+    recibido por la finca (kg verde en venta en verde, kg seco con el
+    bloque 8): OPEX del año / kg vendidos del año (Flujo!B11 del Excel, año
+    12 = plena producción). Es el precio recibido que cubre el OPEX (con
+    IIBB incluido al precio actual). NaN si ese año no hay producción.
+    """
+    fila = df[df["año"] == año].set_index("simulacion")
+    kg = fila["produccion_kg_vendidos"].where(fila["produccion_kg_vendidos"] > 0)
+    return (fila["opex_usd"] / kg).rename("precio_equilibrio_usd_kg_vendido")
 
 
 def resumen_financiero(df: pd.DataFrame, costos: ParametrosCostos) -> pd.DataFrame:

@@ -37,6 +37,19 @@ _MODELO = cargar_modelo_v2()
 
 HECTAREAS_REFERENCIA = _MODELO.supuestos["hectareas_referencia"]
 
+# Base de ingresos (Supuestos, bloque 8). Los DOS valores están SIN VALIDAR
+# con el asesor agronómico: se leen del Excel (B71 y B73) vía
+# data/modelo_v2/supuestos.csv, así que el único lugar donde cambiarlos es
+# el Excel; después hay que correr `python scripts/importar_modelo_v2.py` y
+# volver a correr las simulaciones. Para una prueba puntual sin tocar el
+# Excel, se pisan en `ParametrosCostos(factor_conversion_seco=...,
+# proporcion_precio_productor=...)`.
+FACTOR_CONVERSION_SECO = _MODELO.supuestos["factor_conversion_seco"]
+PROPORCION_PRECIO_PRODUCTOR = _MODELO.supuestos["proporcion_precio_productor"]
+
+# Caso base (Supuestos, bloque 9): venta en verde a la procesadora.
+VENTA_VERDE = _MODELO.venta_verde
+
 # Variación estructural del OPEX respecto del valor del Excel: triangular
 # simétrica ±15%, UN draw por simulación (ver simulate_opex_multiplicador()
 # en src/monte_carlo.py). No hay rango de mercado investigado para esto: es
@@ -76,6 +89,28 @@ class ParametrosCostos:
     cambia la base imponible de Ganancias, no la caja. Ver
     `opex_pre_activado()`. Tratamiento fiscal a confirmar con el contador.
 
+    Base de ingresos. El rendimiento de la curva está en kg VERDES (recién
+    cosechados).
+
+    `venta_verde=True` (caso base, Supuestos bloque 9 / B78): la finca vende
+    en verde a la procesadora. Ingresos = kg verdes * precio en verde, sin
+    conversión ni maquila; la trayectoria de precio es la en verde
+    (`ModeloV2.trayectoria_precio(..., venta_verde=True)`) y los
+    interruptores del bloque 8 no se usan.
+
+    `venta_verde=False`: bloque 8. Los precios son de MERCADO del producto
+    procesado; con los dos interruptores encendidos:
+
+        kg secos       = kg verdes * factor_conversion_seco
+        precio recibido = precio de mercado * proporcion_precio_productor
+        ingresos       = kg secos * precio recibido
+        maquila        = costo por kg seco * kg secos
+
+    `convertir_a_seco=False` usa factor 1 (kg verdes = kg vendidos) y
+    `precio_al_productor=False` usa proporción 1 (la finca cobra el precio
+    de mercado, Supuestos!B72 = 0): los dos apagados reproducen el plan
+    original. Ver `kg_vendidos()` y `precio_recibido()`.
+
     Sincronizar `hectareas` con `ParametrosMC.hectareas` es responsabilidad
     de quien arma la simulación (`run_monte_carlo()` lo hace automático).
     """
@@ -88,6 +123,11 @@ class ParametrosCostos:
     quebrantos_anios: int = int(_MODELO.supuestos["quebrantos_anios"])
     activar_opex_pre: bool = False
     vida_util_implantacion: int = int(_MODELO.supuestos["vida_util_implantacion"])
+    venta_verde: bool = VENTA_VERDE
+    convertir_a_seco: bool = True
+    factor_conversion_seco: float = FACTOR_CONVERSION_SECO
+    precio_al_productor: bool = True
+    proporcion_precio_productor: float = PROPORCION_PRECIO_PRODUCTOR
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
     def __post_init__(self) -> None:
@@ -111,12 +151,51 @@ class ParametrosCostos:
             raise ValueError(
                 f"quebrantos_anios debe ser un entero >= 1; recibido {self.quebrantos_anios!r}"
             )
+        if not (0.0 < self.factor_conversion_seco <= 1.0):
+            raise ValueError(
+                "factor_conversion_seco debe estar en (0, 1]; recibido "
+                f"{self.factor_conversion_seco!r}"
+            )
+        if not (0.0 < self.proporcion_precio_productor <= 1.0):
+            raise ValueError(
+                "proporcion_precio_productor debe estar en (0, 1]; recibido "
+                f"{self.proporcion_precio_productor!r}"
+            )
         if (int(self.vida_util_implantacion) != self.vida_util_implantacion
                 or self.vida_util_implantacion < 1):
             raise ValueError(
                 "vida_util_implantacion debe ser un entero >= 1; recibido "
                 f"{self.vida_util_implantacion!r}"
             )
+
+    # ------------------------------------------------------------------
+    # Base de ingresos (Supuestos, bloque 8)
+    # ------------------------------------------------------------------
+
+    @property
+    def factor_kg_vendidos(self) -> float:
+        """kg vendidos por kg verde (Producción!8): 1 en venta en verde; si
+        no, el factor de conversión, o 1 si está apagada."""
+        if self.venta_verde or not self.convertir_a_seco:
+            return 1.0
+        return self.factor_conversion_seco
+
+    @property
+    def factor_precio_recibido(self) -> float:
+        """Precio recibido / precio de referencia (Producción!10): 1 en venta
+        en verde; si no, la proporción al productor, o 1 si está apagada."""
+        if self.venta_verde or not self.precio_al_productor:
+            return 1.0
+        return self.proporcion_precio_productor
+
+    def kg_vendidos(self, kg_verdes: np.ndarray) -> np.ndarray:
+        """kg vendidos (Producción!8) a partir de kg verdes (Producción!7)."""
+        return np.asarray(kg_verdes, dtype=float) * self.factor_kg_vendidos
+
+    def precio_recibido(self, precio_referencia: np.ndarray) -> np.ndarray:
+        """USD/kg vendido que cobra la finca a partir del precio de referencia
+        (en verde o de mercado procesado, Producción!9)."""
+        return np.asarray(precio_referencia, dtype=float) * self.factor_precio_recibido
 
     # ------------------------------------------------------------------
     # Escala con hectáreas
@@ -235,7 +314,10 @@ class ParametrosCostos:
 
     @property
     def costo_por_kg(self) -> float:
-        """USD por kg producido (maquila de descascarado y secado)."""
+        """USD por kg SECO (maquila de descascarado y secado, OPEX!16); 0 en
+        venta en verde (OPEX!49 * IF(venta_verde=1, 0, 1))."""
+        if self.venta_verde:
+            return 0.0
         opex = self.modelo.opex
         return float(opex.loc[opex["tipo"] == "por_kg", "precio_unit_usd"].sum())
 
@@ -268,7 +350,9 @@ def opex_total(
     Parámetros
     ----------
     produccion_kg, ingresos_usd : np.ndarray
-        Forma (n_simulaciones, n_años).
+        Forma (n_simulaciones, n_años). `produccion_kg` son kg VENDIDOS
+        (`ParametrosCostos.kg_vendidos()`): la maquila se paga por kg seco
+        (y es 0 en venta en verde).
     opex_multiplicador : np.ndarray
         Forma (n_simulaciones,). UN valor por simulación, aplicado a todos
         los años (ver `simulate_opex_multiplicador()` en src/monte_carlo.py).

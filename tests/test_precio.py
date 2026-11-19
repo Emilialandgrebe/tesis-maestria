@@ -93,6 +93,47 @@ def test_mediana_queda_debajo_de_la_trayectoria(especificacion):
     np.testing.assert_allclose(np.median(precios, axis=0)[6:], esperada[6:], rtol=0.01)
 
 
+@pytest.mark.parametrize(
+    "venta_verde, niveles",
+    [(True, (2.5, 4.0, 6.0)), (False, (6.0, 8.0, 10.0))],
+    ids=["en_verde", "mercado_procesado"],
+)
+def test_trayectoria_plana_y_media_igual_al_nivel(venta_verde, niveles):
+    """Precios reales planos en los años 7-20: en verde (bloque 9, caso
+    base) 2,5 / 4 / 6 USD/kg verde; de mercado procesado (bloque 6) 6 / 8 /
+    10. El AR(1) en niveles revierte a ese nivel y, con la corrección de
+    convexidad, E[precio] = nivel en cada año."""
+    modelo = cargar_modelo_v2()
+    for escenario, nivel in zip(("pesimista", "base", "optimista"), niveles):
+        trayectoria = modelo.trayectoria_precio(escenario, N_AÑOS, venta_verde=venta_verde)
+        np.testing.assert_array_equal(trayectoria[:6], 0.0)
+        np.testing.assert_array_equal(trayectoria[6:], nivel)
+    precios = simulate_prices_ar1(
+        200_000, N_AÑOS, ParametrosPrecioAR1(venta_verde=venta_verde), np.random.default_rng(3)
+    )
+    np.testing.assert_allclose(precios.mean(axis=0)[6:], niveles[1], rtol=0.005)
+
+
+def test_default_sigue_caso_base_del_excel():
+    """Sin indicar la base, la trayectoria es la en verde (Supuestos!B78 = 1)."""
+    modelo = cargar_modelo_v2()
+    assert modelo.venta_verde is True
+    np.testing.assert_array_equal(
+        modelo.trayectoria_precio("base", N_AÑOS),
+        modelo.trayectoria_precio("base", N_AÑOS, venta_verde=True),
+    )
+
+
+def test_trayectoria_plan_original_solo_referencia():
+    """La trayectoria vieja sigue disponible como referencia (8 -> 11,5),
+    solo con precio de mercado, y ningún escenario por defecto la usa."""
+    vieja = cargar_modelo_v2().trayectoria_precio("plan_original", N_AÑOS, venta_verde=False)
+    assert vieja[6] == 8.0 and vieja[-1] == 11.5
+    with pytest.raises(ValueError):
+        cargar_modelo_v2().trayectoria_precio("plan_original", N_AÑOS, venta_verde=True)
+    assert ParametrosPrecioAR1().escenario == "base"
+
+
 def test_nivel_mult_escala_la_media():
     params = ParametrosPrecioAR1(nivel_mult=1.2)
     precios = simulate_prices_ar1_antitetico(10_000, N_AÑOS, params, np.random.default_rng(42))
