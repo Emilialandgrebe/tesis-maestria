@@ -65,6 +65,38 @@ PROBLEMA_SOBOL: dict = {
 
 _METRICAS_VALIDAS = ("van_neto_medio_usd", "prob_van_negativo")
 
+# Superficie del plan v2 (ParametrosMC.hectareas). Para la tesis la superficie
+# es una DECISIÓN, no una incertidumbre: con VAN por ha negativo, barrer
+# hectáreas en [60, 180] solo reescala la pérdida (efecto escala) y le roba
+# varianza al resto. Ver `comparar_sensibilidad_ha_fija()`.
+HECTAREAS_PLAN = 120.0
+
+
+def _problema(fijos: dict[str, float] | None) -> dict:
+    """PROBLEMA_SOBOL sin las variables de `fijos` (que quedan constantes)."""
+    if not fijos:
+        return PROBLEMA_SOBOL
+    desconocidas = set(fijos) - set(PROBLEMA_SOBOL["names"])
+    if desconocidas:
+        raise ValueError(f"variables fijas desconocidas: {sorted(desconocidas)}")
+    pares = [
+        (n, b) for n, b in zip(PROBLEMA_SOBOL["names"], PROBLEMA_SOBOL["bounds"])
+        if n not in fijos
+    ]
+    return {
+        "num_vars": len(pares),
+        "names": [n for n, _ in pares],
+        "bounds": [b for _, b in pares],
+    }
+
+
+def _completar(fila: np.ndarray, problema: dict, fijos: dict[str, float] | None) -> np.ndarray:
+    """Vector de 8 parámetros (orden de PROBLEMA_SOBOL) a partir de una fila
+    del problema reducido más los valores fijos."""
+    valores = dict(zip(problema["names"], fila))
+    valores.update(fijos or {})
+    return np.array([valores[n] for n in PROBLEMA_SOBOL["names"]], dtype=float)
+
 
 def _evaluar_metrica(
     fila: np.ndarray,
@@ -159,6 +191,7 @@ def analizar_sensibilidad_sobol(
     n_simulaciones: int = 1_000,
     semilla: int = 42,
     metrica: str = "van_neto_medio_usd",
+    fijos: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """
     Análisis de sensibilidad global de Sobol sobre el simulador real
@@ -198,28 +231,34 @@ def analizar_sensibilidad_sobol(
         Qué estadístico de `resumen_financiero()` analiza Sobol — ver
         `_evaluar_metrica`. Default "van_neto_medio_usd" para no romper el
         análisis ya guardado en data/processed/sobol_indices.parquet.
+    fijos : dict, opcional
+        Variables de PROBLEMA_SOBOL que se sacan del análisis y quedan
+        constantes en el valor dado (p. ej. {"hectareas": 120.0}). Sobol se
+        corre sobre las restantes: N * (D' + 2) evaluaciones.
 
     Retorna
     -------
     pd.DataFrame con columnas: parametro, S1, S1_conf, ST, ST_conf.
     """
+    problema = _problema(fijos)
     muestra = sobol_sample.sample(
-        PROBLEMA_SOBOL, n_base, calc_second_order=False, seed=semilla
+        problema, n_base, calc_second_order=False, seed=semilla
     )
     total = muestra.shape[0]
-    print(f"[{escenario}/{metrica}] {total} evaluaciones del modelo (N={n_base} x {PROBLEMA_SOBOL['num_vars'] + 2})...")
+    print(f"[{escenario}/{metrica}] {total} evaluaciones del modelo (N={n_base} x {problema['num_vars'] + 2})...")
 
     outputs = np.empty(total)
     inicio = time.time()
     paso_reporte = max(1, total // 10)
     for i, fila in enumerate(muestra):
-        outputs[i] = _evaluar_metrica(fila, escenario, n_simulaciones, semilla, metrica)
+        fila_completa = _completar(fila, problema, fijos)
+        outputs[i] = _evaluar_metrica(fila_completa, escenario, n_simulaciones, semilla, metrica)
         if (i + 1) % paso_reporte == 0 or (i + 1) == total:
             transcurrido = time.time() - inicio
             print(f"[{escenario}/{metrica}] {i + 1}/{total} ({transcurrido:.0f}s transcurridos)")
 
     indices = sobol_analyze.analyze(
-        PROBLEMA_SOBOL,
+        problema,
         outputs,
         calc_second_order=False,
         print_to_console=False,
@@ -227,7 +266,7 @@ def analizar_sensibilidad_sobol(
     )
 
     return pd.DataFrame({
-        "parametro": PROBLEMA_SOBOL["names"],
+        "parametro": problema["names"],
         "S1":        indices["S1"],
         "S1_conf":   indices["S1_conf"],
         "ST":        indices["ST"],
@@ -241,6 +280,7 @@ def comparar_sensibilidad_escenarios(
     semilla: int = 42,
     metrica: str = "van_neto_medio_usd",
     ruta_salida: Path | str | None = None,
+    fijos: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """
     Corre `analizar_sensibilidad_sobol()` para los 3 escenarios de precio y
@@ -255,7 +295,7 @@ def comparar_sensibilidad_escenarios(
     resultados = []
     for escenario in ["pesimista", "base", "optimista"]:
         df_escenario = analizar_sensibilidad_sobol(
-            escenario, n_base, n_simulaciones, semilla, metrica
+            escenario, n_base, n_simulaciones, semilla, metrica, fijos
         )
         df_escenario["escenario"] = escenario
         resultados.append(df_escenario)
@@ -299,4 +339,30 @@ def comparar_sensibilidad_riesgo(
         semilla=semilla,
         metrica="prob_van_negativo",
         ruta_salida=ruta,
+    )
+
+
+def comparar_sensibilidad_ha_fija(
+    n_base: int = 128, n_simulaciones: int = 1_000, semilla: int = 42
+) -> pd.DataFrame:
+    """
+    Igual que `comparar_sensibilidad_escenarios()` (VAN medio), pero con
+    `hectareas` fija en HECTAREAS_PLAN (120 ha) y Sobol sobre las otras 7
+    variables. Es la versión para la tesis: la superficie es una decisión
+    de inversión, no una incertidumbre. Con VAN por ha negativo, barrer
+    hectáreas en [60, 180] reescala la pérdida (VAN determinístico: -1,91 M
+    a 60 ha, -2,84 M a 120 ha, -3,84 M a 180 ha) y se lleva una parte
+    grande de la varianza (ST 0,48 en el base, 0,76 en el pesimista) por
+    puro efecto escala.
+
+    Guarda en data/processed/sobol_indices_ha_fija.parquet (no pisa
+    sobol_indices.parquet, que conserva la versión con 8 variables).
+    """
+    ruta = Path(__file__).resolve().parents[1] / "data" / "processed" / "sobol_indices_ha_fija.parquet"
+    return comparar_sensibilidad_escenarios(
+        n_base=n_base,
+        n_simulaciones=n_simulaciones,
+        semilla=semilla,
+        ruta_salida=ruta,
+        fijos={"hectareas": HECTAREAS_PLAN},
     )

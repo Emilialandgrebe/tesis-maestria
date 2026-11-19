@@ -2150,6 +2150,33 @@ Modelar el crecimiento del fruto como un proceso de Wiener geométrico donde la 
 - Probabilidad de recuperar la inversión antes del año 12, 15 y 20
 - Precio mínimo de venta para que el proyecto sea viable dado un escenario climático específico
 
+Avance (2026-11-19, caso venta en verde, determinístico):
+`scripts/palancas_van_cero.py` → `outputs/palancas_van_cero.csv`. Ninguna
+palanca de costos sola lleva el VAN a 0 (−99 % de CAPEX: VAN −668k; −100 %
+de OPEX: −118k); TIR real 1,42 %; precio en verde para VAN = 0: 9,52 USD/kg
+(7,39 con −50 % de CAPEX). Exposición máxima de caja: 40.144 USD/ha.
+
+### Paso 7 — próximos pasos (anotados 2026-11-19, sin implementar)
+
+1. **Precio bayesiano** (pedido de Ezequiel). Poner priors sobre los
+   parámetros del AR(1) del precio en verde: `phi` (persistencia), `sigma`
+   (volatilidad) y el nivel de largo plazo al que revierte. Estimar la
+   posterior con PyMC y propagarla al Monte Carlo (cada simulación sortea
+   sus parámetros de la posterior), en lugar de usar valores puntuales.
+   Ver también "Inferencia bayesiana pendiente" y Paso 4.
+2. **Tipo de cambio real como variable estocástica.** Un `factor_ars` que
+   multiplique los costos en pesos expresados en USD, en CAPEX y OPEX,
+   usando la columna `moneda_pago` de `data/modelo_v2/{capex,opex}.csv`
+   (hoy ningún cálculo la lee). Referencia determinística ya calculada en
+   `scripts/tipo_cambio_real.py`: el 21 % del CAPEX y el 73 % del OPEX
+   operativo son en pesos (48 puntos son sueldos); con ±20 % el VAN se
+   mueve unos ±500k. Definir el proceso (nivel por simulación o AR(1)
+   anual) y el rango con datos de TCR del BCRA.
+3. **Correr Sobol una sola vez con los dos cambios** (con hectáreas fija en
+   120, como `comparar_sensibilidad_ha_fija()`, y `factor_ars` como
+   variable nueva). Aprovechar esa corrida para pasar a `n_base = 256`
+   (ver "Pendiente para la corrida final: Sobol con n_base = 256").
+
 ---
 
 ## Limitaciones
