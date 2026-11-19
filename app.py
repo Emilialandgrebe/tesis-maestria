@@ -60,7 +60,7 @@ _ESTRES_CLIMATICO = {
 }
 _NOMBRE_PARAMETRO = {
     "tasa_descuento": "Tasa de descuento real",
-    "precio_nivel_mult": "Nivel del precio (× trayectoria)",
+    "precio_nivel_mult": "Nivel del precio (× nivel base)",
     "precio_drift_anual": "Drift real del precio",
     "hectareas": "Hectáreas",
     "capex_extra_pct": "Recargo de CAPEX",
@@ -509,7 +509,7 @@ with tab_fan:
                 con_precio = años >= primer_año_precio
                 ax.plot(
                     años[con_precio], trayectoria_excel[con_precio], color="#C44E52",
-                    linestyle="--", linewidth=1.5, label="Trayectoria del Excel",
+                    linestyle="--", linewidth=1.5, label="Nivel del Excel",
                 )
             else:
                 _fan_chart(ax, fan, prefijo, titulo, ylabel, escala)
