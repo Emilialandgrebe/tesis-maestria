@@ -7,7 +7,8 @@ Secciones:
 - Distribución del VAN al año 20 (histograma + métricas).
 - Trayectoria por año (fan charts P10/P50/P90 de producción, precio, ingreso y VAN).
 - Sensibilidad de Sobol (tornado de ST, pre-calculado en
-  `data/processed/sobol_indices.parquet` -- NO se recalcula en vivo).
+  `data/processed/sobol_indices_ha_fija.parquet`, con la superficie fija en
+  120 ha -- NO se recalcula en vivo).
 - Comparación de los tres escenarios de precio a los parámetros del sidebar.
 
 El sidebar incluye los dos interruptores fiscales del Excel: traslado de
@@ -45,7 +46,7 @@ from src.precio_estocastico import precio_retornos_estres  # noqa: E402
 SEMILLA = 42  # fija, igual que el default del motor (reproducibilidad)
 ESCENARIOS = ["pesimista", "base", "optimista"]
 COLOR_ESCENARIO = {"pesimista": "#C44E52", "base": "#4C72B0", "optimista": "#55A868"}
-RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices.parquet"
+RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices_ha_fija.parquet"
 _NOMBRE_PRECIO = {"ar1": "AR(1) en niveles", "ar1_retornos": "AR(1) retornos (estrés)", "triangular": "triangular"}
 # Etiqueta del sidebar -> variante de ParametrosMC (None = sin estrés).
 _ESTRES_CLIMATICO = {
@@ -207,9 +208,9 @@ with st.sidebar:
         help=(
             "Superficie del proyecto. CAPEX/OPEX escalan con las reglas del "
             "Excel v2 (por hectárea, por planta, 1 sistema solar cada 50 ha, "
-            "1 operario cada 8 ha). Nota: el modelo ML surrogate y el Sobol "
-            "pre-calculado cubren 60-180 ha; el motor simula cualquier "
-            "superficie sin problema."
+            "1 operario cada 8 ha). Nota: el modelo ML surrogate cubre "
+            "60-180 ha y el Sobol pre-calculado usa 120 ha fijas; el motor "
+            "simula cualquier superficie sin problema."
         ),
     )
 
@@ -247,10 +248,11 @@ with st.sidebar:
         "Tasa de descuento real", min_value=0.02, max_value=0.25, value=0.1423, step=0.0025,
         format="%.4f",
         help=(
-            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). Primera variable "
-            "en el análisis de Sobol (rango 10–18%): S_T ≈ 0,42–0,56 sobre el "
-            "VAN medio y ≈ 0,56–0,72 sobre P(VAN<0), según el escenario. La "
-            "siguen el nivel del precio (S_T ≈ 0,22–0,52) y su drift."
+            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el análisis "
+            "de Sobol del VAN medio (rango 10–18%, superficie fija en 120 ha) "
+            "pesa S_T ≈ 0,07 en el pesimista, 0,11 en el base y 0,24 en el "
+            "optimista. La variable dominante es el nivel del precio en verde "
+            "(S_T ≈ 0,67–0,75 en los tres escenarios)."
         ),
     )
 
@@ -485,7 +487,10 @@ with tab_sobol:
         st.caption(
             "Índices de Sobol **totales (ST)** del VAN medio, pre-calculados con "
             "`src/sensibilidad.py` con el AR(1) en niveles (no se recalculan en "
-            "vivo). Barras de error = IC bootstrap (`ST_conf`)."
+            "vivo). Barras de error = IC bootstrap (`ST_conf`). La superficie "
+            "está fija en 120 ha: es una decisión de inversión, no una "
+            "incertidumbre. Si se barre (60–180 ha), con VAN por ha negativo "
+            "solo reescala la pérdida y se lleva varianza por efecto escala."
         )
         if modo_precio != "ar1":
             st.info(
@@ -494,12 +499,12 @@ with tab_sobol:
                 "vivo, así que no reflejan el modelo seleccionado."
             )
         st.info(
-            "Estos índices se pre-calcularon con el caso fiscal anterior "
-            "(sin traslado de quebrantos) y la calibración climática "
-            "anterior (serie Best Match), sin estrés climático: no reflejan "
-            "las opciones fiscales ni climáticas del sidebar. Se regeneran "
-            "una sola vez al final, después de ERA5-Land y de la inferencia "
-            "bayesiana (ver notas/PLAN_TESIS.md)."
+            "Estos índices se pre-calcularon con el caso base del motor "
+            "(venta en verde, 120 ha, traslado de quebrantos, sin activación "
+            "del OPEX pre-productivo, sin estrés climático): no reflejan los "
+            "cambios del sidebar. Se regeneran una sola vez al final, con el "
+            "precio bayesiano y el tipo de cambio real (ver notas/PLAN_TESIS.md, "
+            "Paso 7)."
         )
         etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
         fig, ax = plt.subplots(figsize=(8, 3.8))
