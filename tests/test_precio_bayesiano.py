@@ -128,3 +128,40 @@ def test_precio_fijo_usa_el_nivel_esperado():
         ParametrosCostos(),
     )
     np.testing.assert_allclose(df.loc[df["año"] >= 7, "precio_usd_kg"], 9.0)
+
+
+# ---------------------------------------------------------------------------
+# Tipo de cambio real: ParametrosCostos.factor_ars
+# ---------------------------------------------------------------------------
+
+def test_factor_ars_solo_toca_costos_en_pesos():
+    from src.monte_carlo import resumen_financiero
+
+    base, shock = ParametrosCostos(), ParametrosCostos(factor_ars=1.2)
+    items = base.capex_items
+    ars = items["moneda_pago"] == "ARS"
+    esperado = (items.loc[ars, "total_escalado_usd"].sum() * 1.2
+                + items.loc[~ars, "total_escalado_usd"].sum())
+    assert shock.capex_inicial == pytest.approx(esperado)
+    np.testing.assert_allclose(shock.costo_personal(20), 1.2 * base.costo_personal(20))
+    assert shock.costo_por_kg == pytest.approx(1.2 * base.costo_por_kg)  # maquila en ARS
+    assert shock.alicuota_iibb == base.alicuota_iibb
+    assert shock.valor_residual == base.valor_residual
+    # Con factor 1 el caso base no cambia (VAN de control del Excel).
+    p = ParametrosMC(n_simulaciones=1, deterministico=True)
+    van = resumen_financiero(run_monte_carlo(p, base), base)["van_neto_usd"].iloc[0]
+    assert van == pytest.approx(-1_487_137.36, rel=1e-6)
+
+
+def test_factor_ars_reproduce_sensibilidad_en_verde():
+    """outputs/tipo_cambio_real.csv (caso en verde): VAN -2.337.910,61 con
+    0,8 y -3.341.978,13 con 1,2."""
+    from src.monte_carlo import resumen_financiero
+
+    p = ParametrosMC(n_simulaciones=1, deterministico=True)
+    for f, esperado in ((0.8, -2_337_910.61), (1.2, -3_341_978.13)):
+        c = ParametrosCostos(venta_verde=True, factor_ars=f)
+        van = resumen_financiero(run_monte_carlo(p, c), c)["van_neto_usd"].iloc[0]
+        assert van == pytest.approx(esperado, rel=1e-6)
+    with pytest.raises(ValueError):
+        ParametrosCostos(factor_ars=0)

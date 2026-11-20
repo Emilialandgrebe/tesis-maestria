@@ -2194,7 +2194,20 @@ real y los Sobol guardados son del caso en verde.
    2,4), 4,3 con la mezcla 50/50. Sensibilidad (base, 10.000): VAN medio
    −0,46 M (w = 0) a −2,54 M (w = 1), P(VAN<0) 69 % a 99 %; con w = 0,5,
    −1,49 M y 84 %.
-2. **Tipo de cambio real como variable estocástica.** Un `factor_ars` que
+   **Sobol bayesiano (2026-11-19):** `analizar_sobol_bayes()` en
+   `src/sensibilidad.py`, una sola corrida (el escenario solo fija w, así
+   que w se barre en [0, 1]), 7 variables, 120 ha fijas, n_base = 256
+   (2.304 evaluaciones × 1.000 simulaciones), VAN medio y CVaR 10 % de las
+   mismas evaluaciones → `data/processed/sobol_indices_bayes.parquet`.
+   ST sobre el VAN medio: w 0,56 (±0,09), tasa 0,32 (±0,06), factor_ars
+   0,13 (±0,02), recargo de CAPEX 0,04; clima y vecería ≈ 0. ST sobre el
+   CVaR 10 %: w 0,44 (±0,08), factor_ars 0,42 (±0,07), CAPEX 0,13, tasa
+   0,04. Modelo casi aditivo (ΣS1 ≈ 0,97-0,98).
+2. **Tipo de cambio real como variable estocástica.** Implementado como
+   `ParametrosCostos.factor_ars` (2026-11-19): shock permanente sobre los
+   costos en pesos según `moneda_pago` (CAPEX, OPEX, sueldos y maquila),
+   barrido en Sobol en [0,8; 1,2]. Falta, si se quiere, sortearlo por
+   simulación dentro del Monte Carlo (hoy es un parámetro). Un `factor_ars` que
    multiplique los costos en pesos expresados en USD, en CAPEX y OPEX,
    usando la columna `moneda_pago` de `data/modelo_v2/{capex,opex}.csv`
    (hoy ningún cálculo la lee). Referencia determinística ya calculada en

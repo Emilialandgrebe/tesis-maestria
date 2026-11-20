@@ -135,6 +135,13 @@ class ParametrosCostos:
     factor_conversion_seco: float = FACTOR_CONVERSION_SECO
     precio_al_productor: bool = PRECIO_AL_PRODUCTOR
     proporcion_precio_productor: float = PROPORCION_PRECIO_PRODUCTOR
+    # Tipo de cambio real (Paso 7): multiplica, en USD, los costos que se
+    # pagan en pesos (columna `moneda_pago` == "ARS" de capex.csv/opex.csv,
+    # más los sueldos de la hoja Personal y la maquila). Constante en los 20
+    # años: shock permanente. < 1 = devaluación real (los pesos cuestan
+    # menos USD); > 1 = atraso cambiario. No toca ítems en USD, IIBB (es %
+    # de ventas en USD) ni el valor residual de la tierra (USD).
+    factor_ars: float = 1.0
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
     def __post_init__(self) -> None:
@@ -152,6 +159,8 @@ class ParametrosCostos:
             )
         if self.capex_factor <= 0:
             raise ValueError(f"capex_factor debe ser > 0; recibido {self.capex_factor!r}")
+        if self.factor_ars <= 0:
+            raise ValueError(f"factor_ars debe ser > 0; recibido {self.factor_ars!r}")
         if self.hectareas <= 0:
             raise ValueError(f"hectareas debe ser > 0; recibido {self.hectareas!r}")
         if int(self.quebrantos_anios) != self.quebrantos_anios or self.quebrantos_anios < 1:
@@ -219,16 +228,22 @@ class ParametrosCostos:
             default=items["cantidad"],
         )
 
+    def _factor_moneda(self, items: pd.DataFrame) -> np.ndarray:
+        """`factor_ars` en los ítems pagados en pesos, 1 en los de USD."""
+        return np.where(items["moneda_pago"].to_numpy() == "ARS", self.factor_ars, 1.0)
+
     # ------------------------------------------------------------------
     # CAPEX, amortizaciones y valor residual
     # ------------------------------------------------------------------
 
     @property
     def capex_items(self) -> pd.DataFrame:
-        """Hoja CAPEX escalada: agrega `total_escalado_usd` (con capex_factor)."""
+        """Hoja CAPEX escalada: agrega `total_escalado_usd` (con capex_factor
+        y, en los ítems en pesos, factor_ars)."""
         items = self.modelo.capex.copy()
         items["total_escalado_usd"] = (
             self._cantidad_escalada(items) * items["precio_unit_usd"] * self.capex_factor
+            * self._factor_moneda(items)
         )
         return items
 
@@ -271,7 +286,8 @@ class ParametrosCostos:
     # ------------------------------------------------------------------
 
     def costo_personal(self, n_años: int) -> np.ndarray:
-        """Costo laboral total por año 1..n_años (hoja Personal, fila 14)."""
+        """Costo laboral total por año 1..n_años (hoja Personal, fila 14).
+        Los sueldos se pagan en pesos: incluye `factor_ars`."""
         s = self.modelo.supuestos
         t = np.arange(1, n_años + 1)
 
@@ -289,7 +305,7 @@ class ParametrosCostos:
         )
         operarios = s["salario_operario_usd_mes"] * indice_salarial * 12 * dotacion
         encargados = s["salario_encargado_usd_mes"] * indice_salarial * 12 * s["encargados"]
-        return operarios + encargados
+        return (operarios + encargados) * self.factor_ars
 
     def _aplica_por_año(self, aplica_en: pd.Series, n_años: int) -> np.ndarray:
         """Máscara (n_items, n_años): si cada ítem corre en cada año (OPEX!H)."""
@@ -311,7 +327,10 @@ class ParametrosCostos:
         """
         opex = self.modelo.opex
         fijos = opex[opex["tipo"] == "fijo_anual"]
-        costo = self._cantidad_escalada(fijos) * fijos["precio_unit_usd"].to_numpy()
+        costo = (
+            self._cantidad_escalada(fijos) * fijos["precio_unit_usd"].to_numpy()
+            * self._factor_moneda(fijos)
+        )
 
         rampa = self.modelo.rampa_fertilizacion(n_años).reshape(1, -1)
         factor_rampa = np.where(fijos["rampa"].to_numpy().reshape(-1, 1), rampa, 1.0)
@@ -327,7 +346,8 @@ class ParametrosCostos:
         if self.venta_verde:
             return 0.0
         opex = self.modelo.opex
-        return float(opex.loc[opex["tipo"] == "por_kg", "precio_unit_usd"].sum())
+        por_kg = opex[opex["tipo"] == "por_kg"]
+        return float((por_kg["precio_unit_usd"] * self._factor_moneda(por_kg)).sum())
 
     @property
     def alicuota_iibb(self) -> float:
