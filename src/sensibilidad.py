@@ -422,6 +422,8 @@ def _evaluar_bayes(fila: np.ndarray, n_simulaciones: int, semilla: int) -> tuple
         capex_opex_estocastico=False,
         correlacionar_frio_calor=False,
         modo_precio="bayesiano",
+        # factor_ars es una variable barrida por Sobol: no se sortea además.
+        factor_ars_estocastico=False,
     )
     costos = ParametrosCostos(
         hectareas=HECTAREAS_PLAN, capex_factor=1.0 + capex_extra, factor_ars=factor_ars

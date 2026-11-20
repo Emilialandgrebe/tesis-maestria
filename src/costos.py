@@ -26,7 +26,7 @@ vez de redondearse a planta entera como en Supuestos!B16.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -365,11 +365,31 @@ def costo_operativo_anual(año: int, params: ParametrosCostos) -> float:
     return float(params.opex_fijo(año)[año - 1])
 
 
+def _con_factor_ars_doble(params: ParametrosCostos) -> ParametrosCostos:
+    """Copia con factor_ars duplicado. Todos los costos son LINEALES en
+    factor_ars, así que X(2a) - X(a) es la parte en pesos de X evaluada en
+    a, y X(a * u) = X(a) + (u - 1) * [X(2a) - X(a)]."""
+    return replace(params, factor_ars=2.0 * params.factor_ars)
+
+
+def partes_ars(params: ParametrosCostos, n_años: int) -> dict[str, np.ndarray | float]:
+    """Parte en pesos (a factor_ars = params.factor_ars) del CAPEX, las
+    amortizaciones, el OPEX fijo y la maquila por kg."""
+    doble = _con_factor_ars_doble(params)
+    return {
+        "capex": doble.capex_inicial - params.capex_inicial,
+        "amortizaciones": doble.amortizaciones(n_años) - params.amortizaciones(n_años),
+        "opex_fijo": doble.opex_fijo(n_años) - params.opex_fijo(n_años),
+        "costo_por_kg": doble.costo_por_kg - params.costo_por_kg,
+    }
+
+
 def opex_total(
     produccion_kg: np.ndarray,
     ingresos_usd: np.ndarray,
     params: ParametrosCostos,
     opex_multiplicador: np.ndarray,
+    factor_ars_sim: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     OPEX total por simulación y año (OPEX!D68):
@@ -384,9 +404,20 @@ def opex_total(
     opex_multiplicador : np.ndarray
         Forma (n_simulaciones,). UN valor por simulación, aplicado a todos
         los años (ver `simulate_opex_multiplicador()` en src/monte_carlo.py).
+    factor_ars_sim : np.ndarray, opcional
+        Forma (n_simulaciones,). Sorteo del tipo de cambio real por
+        simulación (multiplica a `params.factor_ars`): escala la parte en
+        pesos del OPEX fijo y de la maquila. None = sin sorteo.
     """
     n, T = produccion_kg.shape
-    operativo = params.opex_fijo(T).reshape(1, T) + params.costo_por_kg * produccion_kg
+    fijo = params.opex_fijo(T).reshape(1, T)
+    por_kg = params.costo_por_kg
+    if factor_ars_sim is not None:
+        ars = partes_ars(params, T)
+        u = np.asarray(factor_ars_sim, dtype=float).reshape(n, 1) - 1.0
+        fijo = fijo + u * ars["opex_fijo"].reshape(1, T)
+        por_kg = por_kg + u * ars["costo_por_kg"]
+    operativo = fijo + por_kg * produccion_kg
     multiplicador = np.asarray(opex_multiplicador).reshape(n, 1)
     return operativo * multiplicador + params.alicuota_iibb * ingresos_usd
 
@@ -473,6 +504,7 @@ def flujo_caja_neto(
     ingresos_usd: np.ndarray,
     opex_usd: np.ndarray,
     params: ParametrosCostos,
+    factor_ars_sim: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """
     Flujo libre del proyecto por simulación y año 1..T, sin el CAPEX del
@@ -493,10 +525,18 @@ def flujo_caja_neto(
     dict con "ebitda", "opex_pre_activado", "amortizacion_implantacion",
     "base_imponible", "quebrantos_utilizados", "impuesto_ganancias" y
     "flujo_neto", cada uno de la misma forma que `ingresos_usd`.
+
+    `factor_ars_sim` (n_simulaciones,): sorteo del tipo de cambio real por
+    simulación; escala la parte en pesos de las amortizaciones (el CAPEX en
+    pesos cambia, y con él el escudo fiscal).
     """
-    T = ingresos_usd.shape[1]
+    n, T = ingresos_usd.shape
     ebitda = ingresos_usd - opex_usd
-    ebit = ebitda - params.amortizaciones(T).reshape(1, T)
+    amort = params.amortizaciones(T).reshape(1, T)
+    if factor_ars_sim is not None:
+        u = np.asarray(factor_ars_sim, dtype=float).reshape(n, 1) - 1.0
+        amort = amort + u * partes_ars(params, T)["amortizaciones"].reshape(1, T)
+    ebit = ebitda - amort
     activado, amort_implantacion = opex_pre_activado(opex_usd, params)
     base = ebit + activado - amort_implantacion
     if params.quebrantos:

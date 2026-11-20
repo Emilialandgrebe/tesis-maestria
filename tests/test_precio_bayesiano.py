@@ -165,3 +165,60 @@ def test_factor_ars_reproduce_sensibilidad_en_verde():
         assert van == pytest.approx(esperado, rel=1e-6)
     with pytest.raises(ValueError):
         ParametrosCostos(factor_ars=0)
+
+
+def test_factor_ars_estocastico_lineal_exacto():
+    """Un sorteo u por simulación da el mismo VAN que ParametrosCostos(factor_ars=u)."""
+    from src.monte_carlo import _componentes_deterministicos, _orquestar_resultado, resumen_financiero
+
+    p = ParametrosMC(n_simulaciones=3, deterministico=True)
+    c = ParametrosCostos()
+    y, pr, ce, om = _componentes_deterministicos(p, c)
+    u = np.array([0.8, 1.0, 1.2])
+    van = resumen_financiero(_orquestar_resultado(y, pr, p, c, ce, om, u), c)["van_neto_usd"]
+    for i, f in enumerate(u):
+        cf = ParametrosCostos(factor_ars=f)
+        p1 = ParametrosMC(n_simulaciones=1, deterministico=True)
+        esperado = resumen_financiero(run_monte_carlo(p1, cf), cf)["van_neto_usd"].iloc[0]
+        assert van.iloc[i] == pytest.approx(esperado, rel=1e-10)
+
+
+def test_factor_ars_flag_por_defecto():
+    from src.monte_carlo import factor_ars_activo
+
+    assert factor_ars_activo(ParametrosMC(modo_precio="bayesiano")) is True
+    assert factor_ars_activo(ParametrosMC()) is False
+    assert factor_ars_activo(ParametrosMC(modo_precio="bayesiano", factor_ars_estocastico=False)) is False
+    assert factor_ars_activo(ParametrosMC(factor_ars_estocastico=True)) is True
+
+
+def test_factor_ars_apagado_no_cambia_corridas():
+    """Sin el flag no se consume rng: el AR(1) da exactamente lo mismo."""
+    a = run_monte_carlo_antitetico(ParametrosMC(n_simulaciones=200), ParametrosCostos())
+    b = run_monte_carlo_antitetico(
+        ParametrosMC(n_simulaciones=200, factor_ars_estocastico=False), ParametrosCostos()
+    )
+    np.testing.assert_array_equal(a["van_neto_usd"], b["van_neto_usd"])
+
+
+def test_factor_ars_sorteo_uniforme_y_antitetico():
+    from src.monte_carlo import simulate_factor_ars
+
+    p = ParametrosMC(n_simulaciones=100_000, factor_ars_estocastico=True)
+    f = simulate_factor_ars(p, np.random.default_rng(0))
+    assert f.min() >= 0.8 and f.max() <= 1.2
+    assert f.mean() == pytest.approx(1.0, abs=0.002)
+    fa = simulate_factor_ars(p, np.random.default_rng(0), antitetico=True)
+    np.testing.assert_allclose(fa[:50_000] + fa[50_000:], 2.0)
+
+
+def test_factor_ars_estocastico_agrega_dispersion():
+    from src.monte_carlo import resumen_financiero
+
+    kw = dict(n_simulaciones=4_000, modo_precio="bayesiano")
+    c = ParametrosCostos()
+    sin = resumen_financiero(run_monte_carlo_antitetico(ParametrosMC(**kw, factor_ars_estocastico=False), c), c)
+    con = resumen_financiero(run_monte_carlo_antitetico(ParametrosMC(**kw), c), c)
+    assert con["van_neto_usd"].std() > sin["van_neto_usd"].std()
+    # Media ~igual: E[u] = 1 y el VAN es casi lineal en u.
+    assert con["van_neto_usd"].mean() == pytest.approx(sin["van_neto_usd"].mean(), rel=0.03)

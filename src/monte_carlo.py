@@ -13,7 +13,13 @@ from scipy.stats import beta as beta_dist
 from scipy.stats import norm
 from scipy.stats import triang as triang_dist
 
-from src.costos import HECTAREAS_REFERENCIA, ParametrosCostos, flujo_caja_neto, opex_total
+from src.costos import (
+    HECTAREAS_REFERENCIA,
+    ParametrosCostos,
+    flujo_caja_neto,
+    opex_total,
+    partes_ars,
+)
 from src.modelo_v2 import cargar_modelo_v2
 from src.precio_bayesiano import (
     ParametrosPrecioBayes,
@@ -463,6 +469,13 @@ class ParametrosMC:
     # Solo para venta en seco.
     modo_precio: Literal["ar1", "triangular", "bayesiano"] = "ar1"
 
+    # Tipo de cambio real estocástico (Paso 7): un sorteo por simulación,
+    # Uniforme(FACTOR_ARS_MIN, FACTOR_ARS_MAX), constante en los 20 años
+    # (shock permanente), que multiplica la parte en pesos del CAPEX, las
+    # amortizaciones, el OPEX y la maquila (ParametrosCostos.factor_ars,
+    # según `moneda_pago`). None = activo solo con modo_precio="bayesiano".
+    factor_ars_estocastico: bool | None = None
+
     # Activa la variabilidad estocástica de OPEX (multiplicador de OPEX --
     # ver simulate_opex_multiplicador() más abajo). El nombre conserva
     # "capex" por compatibilidad: desde Fase B el componente de CAPEX
@@ -555,6 +568,32 @@ def _simular_veceria(params: ParametrosMC, rng: np.random.Generator) -> np.ndarr
 
 
 FUENTES_ESTOCASTICAS = ("precio", "clima", "veceria", "plantas")
+
+# Rango del tipo de cambio real estocástico (ParametrosMC.factor_ars_estocastico).
+FACTOR_ARS_MIN, FACTOR_ARS_MAX = 0.8, 1.2
+
+
+def factor_ars_activo(params: ParametrosMC) -> bool:
+    """El flag explícito manda; None = activo solo en el modo bayesiano."""
+    if params.factor_ars_estocastico is None:
+        return params.modo_precio == "bayesiano"
+    return bool(params.factor_ars_estocastico)
+
+
+def simulate_factor_ars(
+    params: ParametrosMC, rng: np.random.Generator, antitetico: bool = False
+) -> np.ndarray | None:
+    """Un sorteo Uniforme(0,8; 1,2) por simulación, o None si está apagado
+    (sin consumir `rng`: las corridas sin el flag no cambian). Con
+    `antitetico`, la fila i + n//2 usa 0,8 + 1,2 - u_i."""
+    if not factor_ars_activo(params):
+        return None
+    n = params.n_simulaciones
+    if antitetico:
+        u = _generar_uniformes_antiteticos(n, (1,), rng).ravel()
+    else:
+        u = rng.random(n)
+    return FACTOR_ARS_MIN + (FACTOR_ARS_MAX - FACTOR_ARS_MIN) * u
 
 
 def _validar_fuentes_fijas(params: ParametrosMC) -> None:
@@ -1237,6 +1276,7 @@ def _orquestar_resultado(
     costos: ParametrosCostos,
     capex_extra_usd: np.ndarray,
     opex_multiplicador: np.ndarray,
+    factor_ars_sim: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Arma el DataFrame de resultados (ingresos, OPEX, EBITDA, Ganancias,
@@ -1264,8 +1304,12 @@ def _orquestar_resultado(
     # maquila sobre kg vendidos (secos con el bloque 8, verdes en venta en verde).
     produccion_kg_vendidos = costos.kg_vendidos(yields * params.hectareas)
     revenue = simulate_revenue(yields, prices, params.hectareas, costos)
-    opex = opex_total(produccion_kg_vendidos, revenue, costos, opex_multiplicador)
-    flujo = flujo_caja_neto(revenue, opex, costos)
+    opex = opex_total(produccion_kg_vendidos, revenue, costos, opex_multiplicador, factor_ars_sim)
+    flujo = flujo_caja_neto(revenue, opex, costos, factor_ars_sim)
+    if factor_ars_sim is not None:
+        # La parte en pesos del CAPEX va por la columna de CAPEX estocástico,
+        # así `resumen_financiero()` la ve sin cambios.
+        capex_extra_usd = capex_extra_usd + (factor_ars_sim - 1.0) * partes_ars(costos, T)["capex"]
     flujo_neto = flujo["flujo_neto"]
 
     años = np.arange(1, params.n_años + 1)
@@ -1362,8 +1406,9 @@ def run_monte_carlo(
     opex_mult = simulate_opex_multiplicador(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
+    factor_ars = simulate_factor_ars(params, rng)
 
-    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult, factor_ars)
 
 
 def run_monte_carlo_antitetico(
@@ -1404,8 +1449,9 @@ def run_monte_carlo_antitetico(
     opex_mult = simulate_opex_multiplicador_antitetico(
         params.n_simulaciones, costos, rng, params.capex_opex_estocastico
     )
+    factor_ars = simulate_factor_ars(params, rng, antitetico=True)
 
-    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult)
+    return _orquestar_resultado(yields, prices, params, costos, capex_extra, opex_mult, factor_ars)
 
 
 def run_monte_carlo_precio_historico(

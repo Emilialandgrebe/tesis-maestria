@@ -90,7 +90,10 @@ def sensibilidad_w(n: int) -> pd.DataFrame:
     filas = []
     inicio = time.time()
     for w in PESOS:
-        params = ParametrosMC(n_simulaciones=n, modo_precio="bayesiano", semilla=SEMILLA)
+        # Sin el tipo de cambio estocástico: aísla el efecto de w (ver
+        # scripts/tabla_mc_escenarios.py para la comparación con y sin).
+        params = ParametrosMC(n_simulaciones=n, modo_precio="bayesiano", semilla=SEMILLA,
+                              factor_ars_estocastico=False)
         costos = ParametrosCostos(hectareas=params.hectareas)
         df = run_monte_carlo_antitetico(params, costos, ParametrosPrecioBayes(peso_exportacion=w))
         r = resumen_financiero(df, costos)

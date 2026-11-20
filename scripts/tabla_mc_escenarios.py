@@ -1,9 +1,15 @@
 """Tabla de Monte Carlo por escenario de precio y especificación del AR(1).
 
-Para cada escenario (pesimista / base / optimista) y cada especificación del
-precio (AR(1) en niveles, la del motor; AR(1) sobre retornos, estrés) corre
-`run_monte_carlo` con los defaults del motor (caso base del Excel, 120 ha,
-tasa real, OPEX estocástico, clima, vecería, quebrantos) y resume el VAN.
+Para cada escenario (pesimista / base / optimista) y cada modelo de precio
+corre `run_monte_carlo` con los defaults del motor (caso base del Excel,
+120 ha, tasa real, OPEX estocástico, clima, vecería, quebrantos) y resume el
+VAN. Modelos:
+
+- "niveles": AR(1) en niveles (default del motor);
+- "retornos (estrés)": AR(1) sobre retornos;
+- "bayesiano": precio bayesiano (src/precio_bayesiano.py; el escenario fija
+  el peso w = 1 / 0,5 / 0), SIN tipo de cambio real estocástico;
+- "bayesiano + TCR": ídem con factor_ars ~ U(0,8; 1,2) por simulación.
 
 Columnas: VAN determinístico (`ParametrosMC(deterministico=True)`, el del
 Excel), VAN medio con su IC95% (±1,96·desvío/√n), percentiles 5/10/50/90/95,
@@ -50,10 +56,18 @@ def _van_deterministico(escenario: str) -> float:
     return float(resumen_financiero(run_monte_carlo(params, costos), costos)["van_neto_usd"].iloc[0])
 
 
-def fila(escenario: str, especificacion: str, n: int) -> dict:
-    params = ParametrosMC(n_simulaciones=n, escenario=escenario, semilla=SEMILLA)
+MODELOS = {
+    "niveles": dict(),
+    "retornos (estrés)": dict(),
+    "bayesiano": dict(modo_precio="bayesiano", factor_ars_estocastico=False),
+    "bayesiano + TCR": dict(modo_precio="bayesiano", factor_ars_estocastico=True),
+}
+
+
+def fila(escenario: str, modelo: str, n: int) -> dict:
+    params = ParametrosMC(n_simulaciones=n, escenario=escenario, semilla=SEMILLA, **MODELOS[modelo])
     costos = ParametrosCostos(hectareas=params.hectareas)
-    precio_params = precio_retornos_estres(escenario) if especificacion == "retornos" else None
+    precio_params = precio_retornos_estres(escenario) if modelo == "retornos (estrés)" else None
     df = run_monte_carlo(params, costos, precio_params)
     resumen = resumen_financiero(df, costos)
     van = resumen["van_neto_usd"].to_numpy()
@@ -62,7 +76,7 @@ def fila(escenario: str, especificacion: str, n: int) -> dict:
     n_peores = max(1, int(np.ceil(0.10 * n)))
     return {
         "escenario": escenario,
-        "precio": "niveles" if especificacion == "niveles" else "retornos (estrés)",
+        "precio": modelo,
         "van_determinístico": _van_deterministico(escenario),
         "van_medio": van.mean(),
         "ic95": 1.96 * van.std(ddof=1) / np.sqrt(n),
@@ -82,9 +96,9 @@ if __name__ == "__main__":
     inicio = time.time()
     filas = []
     for escenario in ESCENARIOS:
-        for especificacion in ("niveles", "retornos"):
-            filas.append(fila(escenario, especificacion, n))
-            print(f"{escenario}/{especificacion} ({time.time() - inicio:.0f}s)")
+        for modelo in MODELOS:
+            filas.append(fila(escenario, modelo, n))
+            print(f"{escenario}/{modelo} ({time.time() - inicio:.0f}s)")
     tabla = pd.DataFrame(filas)
     SALIDA.parent.mkdir(exist_ok=True)
     tabla.to_csv(SALIDA, index=False)
