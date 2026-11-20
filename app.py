@@ -259,7 +259,7 @@ def cargar_sobol(ruta: str) -> pd.DataFrame:
 
 st.set_page_config(page_title="Monte Carlo — Pistacho Jocolí", layout="wide")
 st.title("Simulación de Monte Carlo — Pistacho Jocolí")
-st.subheader("Caso base: venta del pistacho seco con cáscara, a precio al productor")
+st.subheader("Caso base: venta del pistacho en verde (recién cosechado, con pelón) a la procesadora")
 st.caption(
     "Interfaz sobre el motor (`src/monte_carlo.py`): 120 ha, USD constantes "
     "2026, tasa real, precio AR(1) en niveles calibrado con FRED."
@@ -282,15 +282,15 @@ with st.sidebar:
     escenario = st.selectbox(
         "Escenario de precio", options=ESCENARIOS, index=1,
         help=(
-            "Nivel de precio ancla (USD/kg seco con cáscara, al productor) del "
-            "proyecto: pesimista 5, base 7 y optimista 9 USD/kg seco (Excel v2, "
-            "bloque 6). La finca paga la maquila de pelado y secado (0,40 "
-            "USD/kg seco). La venta en verde queda como alternativa. El modelo "
-            "probabilístico que genera la trayectoria de precio alrededor "
-            "de ese ancla se elige abajo, en 'Modelo de precio'. En el modelo "
-            "bayesiano el escenario fija el peso w de la paridad de "
-            "exportación: pesimista w = 1 (nivel medio 5), base 0,5 (7) y "
-            "optimista 0 (9)."
+            "Nivel de precio ancla (USD/kg verde, lo que paga la procesadora "
+            "por el pistacho recién cosechado, con pelón): pesimista 2,5, base "
+            "4 y optimista 5,5 USD/kg verde (Excel v2, bloque 9). La finca no "
+            "procesa: no hay conversión a seco ni maquila. La venta en seco "
+            "con cáscara queda como alternativa. El modelo probabilístico que "
+            "genera la trayectoria de precio alrededor de ese ancla se elige "
+            "abajo, en 'Modelo de precio'. En el modelo bayesiano el escenario "
+            "fija el peso w de la paridad de exportación: pesimista w = 1 "
+            "(nivel medio 2,5), base 0,5 (4) y optimista 0 (5,5)."
         ),
     )
 
@@ -311,7 +311,7 @@ with st.sidebar:
             "niveles, pero phi y sigma se sortean por simulación de la "
             "posterior de FRED (phi mediana 0,87, IC90 0,73–0,98: admite raíz "
             "unitaria) y el nivel de largo plazo es una mezcla de la paridad "
-            "de exportación (~5 USD/kg) y la de importación (~9), con peso w "
+            "de exportación (~2,5 USD/kg verde) y la de importación (~5,5), con peso w "
             "según el escenario. "
             "AR(1) sobre retornos: el desvío no revierte y la dispersión del "
             "año 20 duplica el rango histórico; se usa como estrés. "
@@ -327,7 +327,7 @@ with st.sidebar:
             help=(
                 "Un sorteo por simulación, Uniforme(0,8; 1,2), constante en los "
                 "20 años: shock permanente sobre los costos que se pagan en "
-                "pesos (CAPEX, OPEX, sueldos y maquila, según moneda_pago). "
+                "pesos (CAPEX, OPEX y sueldos, según moneda_pago). "
                 "< 1 = devaluación real, > 1 = atraso cambiario. Activado por "
                 "defecto en el modo bayesiano."
             ),
@@ -343,11 +343,12 @@ with st.sidebar:
         format_func=lambda t: _pct(t, 2),
         help=(
             "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el Sobol "
-            "con el precio bayesiano (caso seco, rango 10–18%, 120 ha fijas) "
-            "es la segunda variable del VAN medio (S_T ≈ 0,32, detrás del peso "
-            "de la paridad w, 0,56), pero casi no pesa en el CVaR 10% (≈ 0,04): "
-            "en la cola mala dominan la inversión y los costos de los primeros "
-            "años, que la tasa casi no descuenta."
+            "con el precio bayesiano (caso base en verde, rango 10–18%, 120 ha "
+            "fijas) pesa poco en el VAN medio (S_T ≈ 0,08; dominan el peso de "
+            "la paridad w, 0,68, y el tipo de cambio real, 0,22) y algo más en "
+            "el CVaR 10% (≈ 0,18): en la cola mala los flujos son negativos "
+            "casi todos los años, y una tasa más alta achica su valor "
+            "presente."
         ),
     )
 
@@ -533,8 +534,8 @@ with tab_fan:
     trayectoria_excel = cargar_modelo_v2().trayectoria_precio(escenario, len(fan))
     primer_año_precio = int(fan.index[np.argmax(trayectoria_excel > 0)])
     paneles = (
-        ("prod", "Producción", "kg secos con cáscara/ha", 1.0),
-        ("precio", "Precio al productor (seco con cáscara)", "USD/kg seco (constantes 2026)", 1.0),
+        ("prod", "Producción", "kg verdes/ha", 1.0),
+        ("precio", "Precio en verde (pagado por la procesadora)", "USD/kg verde (constantes 2026)", 1.0),
         ("ingreso", "Ingreso bruto anual", "millones USD", 1e6),
         ("van", "VAN neto acumulado", "millones USD", 1e6),
     )
@@ -596,7 +597,7 @@ with tab_sobol:
             st.info(
                 "Estos índices se calcularon con el precio bayesiano: no "
                 "reflejan el 'Modelo de precio' elegido en el sidebar ni sus "
-                "otras opciones (caso base: venta en seco, quebrantos sí, "
+                "otras opciones (caso base: venta en verde, quebrantos sí, "
                 "activación no, sin estrés climático)."
             )
 

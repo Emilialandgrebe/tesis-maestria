@@ -2169,6 +2169,48 @@ explica ~79 % de la varianza del VAN. La venta en verde queda como
 alternativa (sus VAN no cambian). Los análisis de palancas y tipo de cambio
 real y los Sobol guardados son del caso en verde.
 
+### Corrección definitiva del caso base: venta en verde a la procesadora (2026-11-20, rama `base-verde-procesadora`)
+
+Confirmado con el asesor: la finca vende el pistacho RECIÉN COSECHADO, con
+pelón, a la procesadora; no lo procesa. Reemplaza el caso seco del
+2026-11-19, que queda como alternativa.
+
+- **Excel** (COM, solo valores y textos): Supuestos B78 = 1; precios en
+  verde del bloque 9 planos años 7-20 en 2,5 / 4 / 5,5 USD/kg verde (el
+  optimista bajó de 6 a 5,5). La maquila queda en 0 por la fórmula
+  existente (OPEX!E49 × IF(B78 = 1; 0; 1)); la tarifa de 0,40 USD/kg seco se
+  conserva como insumo de la alternativa en seco. Etiquetas de rendimiento
+  en kg verdes; bloques 6 y 8 marcados como alternativa. VAN de control:
+  base −2.836.458,08, pesimista −3.713.633,54, optimista −2.045.189,20 (TIR
+  base 1,42 %). Tests de consistencia: verde por defecto, seco como
+  alternativa (sus VAN no cambian).
+- **Precio bayesiano en verde:** `MEDIAS_PARIDAD` en
+  `src/precio_bayesiano.py` (verde 2,5 / 5,5; seco 5 / 9), mismo desvío
+  0,10 y misma posterior de (phi, sigma). w = 1 / 0,5 / 0 → E[mu] = 2,5 / 4 /
+  5,5. El motor completa `venta_verde` desde `ParametrosCostos` (igual que
+  el AR(1)); base de precio distinta de la de los costos → error.
+- **Monte Carlo** (`outputs/tabla_mc_escenarios.csv`, 10.000): VAN medio
+  base −2,84 M (niveles) / −2,90 M (bayesiano); P(VAN<0) 100 % en el base
+  con niveles, 99 % con el bayesiano; optimista 98-100 %. CVaR 10 % base
+  −3,66 M (niveles) a −4,51 M (bayesiano + TCR). Precio de equilibrio
+  operativo del año 12 ≈ 2,29 USD/kg verde. Descomposición de varianza
+  (base): precio 72 %, OPEX 12 %, plantas 8 %, clima 4-6 %, vecería 3 %.
+- **Grilla** (`outputs/grilla_viabilidad_verde.csv`, 2-8 USD/kg verde ×
+  2.000-5.000 kg/ha, 5.000 simulaciones por celda): el VAN mediano pasa a
+  positivo recién con ~30.000 USD/ha de ingreso bruto a plena producción
+  (7,5 × 4.000, 6 × 5.000, 8 × 3.750). Con 3.000 kg/ha, P(VAN<0) ≥ 81 %
+  incluso a 8 USD/kg.
+- **Sobol bayesiano** (mismo diseño: 7 variables, 120 ha, n_base = 256).
+  ST del VAN medio: w 0,68 (±0,10), factor_ars 0,22 (±0,04), CAPEX 0,08,
+  tasa 0,08 (en seco: w 0,56, tasa 0,32, factor_ars 0,13). ST del CVaR 10
+  %: factor_ars 0,42 (±0,07), w 0,27 (±0,06), tasa 0,18 (±0,03), CAPEX
+  0,14. La tasa pierde peso en el VAN medio porque en verde hay mucho
+  menos ingreso futuro que descontar; gana en el CVaR porque en la cola
+  los flujos son negativos casi todos los años.
+- `scripts/palancas_van_cero.py` y `scripts/tipo_cambio_real.py` siguen
+  fijados en verde con el escenario base (precio 4, sin cambios): sus
+  outputs siguen valiendo.
+
 ### Paso 7 — próximos pasos (anotados 2026-11-19, sin implementar)
 
 1. **Precio bayesiano** (pedido de Ezequiel). Poner priors sobre los

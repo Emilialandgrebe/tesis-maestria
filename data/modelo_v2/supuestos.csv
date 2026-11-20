@@ -3,7 +3,7 @@ ultimo_anio_preproductivo,6.0,año,Supuestos!B8
 hectareas_referencia,120.0,ha,Supuestos!B11
 plantas_totales,45000.0,plantas,Supuestos!B16
 proporcion_machos,0.08,fracción,Supuestos!B17
-rendimiento_plena_kg_ha,3000.0,kg seco con cáscara/ha,Supuestos!B20
+rendimiento_plena_kg_ha,3000.0,kg verdes/ha,Supuestos!B20
 ha_por_sistema_solar,50.0,ha,Supuestos!B21
 salario_operario_usd_mes,850.0,USD/mes,Supuestos!B25
 salario_encargado_usd_mes,1400.0,USD/mes,Supuestos!B26
@@ -26,7 +26,7 @@ vida_util_implantacion,20.0,años,Supuestos!B68
 factor_conversion_seco,1.0,kg seco/kg de rendimiento,Supuestos!B71
 precio_al_productor,0.0,0/1,Supuestos!B72
 proporcion_precio_productor,0.5,proporción,Supuestos!B73
-venta_verde,0.0,0/1,Supuestos!B78
+venta_verde,1.0,0/1,Supuestos!B78
 tasa_rf,0.0395,fracción/año,Tasa!B6
 prima_mercado,0.0423,fracción/año,Tasa!B7
 beta_desapalancada,0.81,-,Tasa!B8

@@ -2,13 +2,14 @@
 
 Dos bases de venta (argumento `base`):
 
-- `seco` (default, caso base desde 2026-11-19): venta en seco con cáscara a
-  precio al productor (Supuestos bloques 6 y 8). Precio 4-12 USD/kg seco,
-  rendimiento 2.000-4.000 kg secos con cáscara/ha.
-  Salida: outputs/grilla_viabilidad_seco.csv
-- `verde` (alternativa, bloque 9): venta en verde a la procesadora. Precio
-  1,5-10 USD/kg verde, rendimiento 2.000-4.000 kg verdes/ha.
+- `verde` (default, caso base desde 2026-11-20): venta del pistacho recién
+  cosechado, con pelón, a la procesadora (bloque 9). Precio 2-8 USD/kg
+  verde, rendimiento 2.000-5.000 kg verdes/ha.
   Salida: outputs/grilla_viabilidad_verde.csv
+- `seco` (alternativa): venta en seco con cáscara a precio al productor
+  (Supuestos bloques 6 y 8). Precio 4-12 USD/kg seco, rendimiento
+  2.000-4.000 kg secos con cáscara/ha.
+  Salida: outputs/grilla_viabilidad_seco.csv
 
 En cada celda corre el Monte Carlo completo (`run_monte_carlo_antitetico`,
 motor por defecto: precio AR(1) en niveles, clima, vecería, falla de plantas
@@ -16,8 +17,8 @@ y OPEX estocástico, quebrantos) y guarda P(VAN<0) y el VAN mediano, más el
 VAN medio, P10 y P90.
 
 - Precio: nivel plano de los años 7-20 al que revierte el AR(1),
-  `nivel_mult = precio / precio base del Excel` (7 USD/kg seco o 4 USD/kg
-  verde).
+  `nivel_mult = precio / precio base del Excel` (4 USD/kg verde o 7 USD/kg
+  seco).
 - Rendimiento: kg/ha a plena producción (el 3.000 del Excel,
   Supuestos!B20), escalando `ParametrosMC.rendimiento_plena`; la curva de
   maduración y los factores estocásticos no cambian.
@@ -27,7 +28,7 @@ diferencias entre celdas son efecto del precio y el rendimiento, no ruido de
 muestreo.
 
 Uso:
-    python scripts/grilla_viabilidad.py [n_simulaciones] [seco|verde]
+    python scripts/grilla_viabilidad.py [n_simulaciones] [verde|seco]
 """
 
 from __future__ import annotations
@@ -54,23 +55,24 @@ from src.monte_carlo import (  # noqa: E402
 )
 from src.precio_estocastico import ParametrosPrecioAR1  # noqa: E402
 
-RENDIMIENTOS = np.arange(2_000, 4_000 + 1, 250)  # kg/ha a plena producción
 BASES = {
-    "seco": {
-        "venta_verde": False,
-        "precios": np.arange(4.0, 12.0 + 1e-9, 0.5),  # USD/kg seco al productor
-        "col_precio": "precio_seco_usd_kg",
-        "col_rend": "rendimiento_kg_seco_ha",
-        "unidad_precio": "USD/kg seco",
-        "unidad_rend": "kg secos con cáscara/ha",
-    },
     "verde": {
         "venta_verde": True,
-        "precios": np.arange(1.5, 10.0 + 1e-9, 0.5),  # USD/kg verde
+        "precios": np.arange(2.0, 8.0 + 1e-9, 0.5),  # USD/kg verde
+        "rendimientos": np.arange(2_000, 5_000 + 1, 250),  # kg verdes/ha a plena producción
         "col_precio": "precio_verde_usd_kg",
         "col_rend": "rendimiento_kg_verde_ha",
         "unidad_precio": "USD/kg verde",
         "unidad_rend": "kg verdes/ha",
+    },
+    "seco": {
+        "venta_verde": False,
+        "precios": np.arange(4.0, 12.0 + 1e-9, 0.5),  # USD/kg seco al productor
+        "rendimientos": np.arange(2_000, 4_000 + 1, 250),  # kg secos/ha a plena producción
+        "col_precio": "precio_seco_usd_kg",
+        "col_rend": "rendimiento_kg_seco_ha",
+        "unidad_precio": "USD/kg seco",
+        "unidad_rend": "kg secos con cáscara/ha",
     },
 }
 
@@ -81,7 +83,7 @@ def _precio_base(n_años: int, venta_verde: bool) -> float:
 
 
 def celda(
-    precio: float, rendimiento: float, n_simulaciones: int, base: str = "seco", semilla: int = 42
+    precio: float, rendimiento: float, n_simulaciones: int, base: str = "verde", semilla: int = 42
 ) -> dict:
     cfg = BASES[base]
     params = ParametrosMC(
@@ -110,12 +112,13 @@ def celda(
     }
 
 
-def grilla(n_simulaciones: int = 5_000, base: str = "seco") -> pd.DataFrame:
+def grilla(n_simulaciones: int = 5_000, base: str = "verde") -> pd.DataFrame:
     precios = BASES[base]["precios"]
+    rendimientos = BASES[base]["rendimientos"]
     filas = []
     inicio = time.time()
-    total = len(precios) * len(RENDIMIENTOS)
-    for rendimiento in RENDIMIENTOS:
+    total = len(precios) * len(rendimientos)
+    for rendimiento in rendimientos:
         for precio in precios:
             filas.append(celda(float(precio), float(rendimiento), n_simulaciones, base))
         print(f"{len(filas)}/{total} celdas ({time.time() - inicio:.0f}s)")
@@ -124,7 +127,7 @@ def grilla(n_simulaciones: int = 5_000, base: str = "seco") -> pd.DataFrame:
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 5_000
-    base = sys.argv[2] if len(sys.argv) > 2 else "seco"
+    base = sys.argv[2] if len(sys.argv) > 2 else "verde"
     cfg = BASES[base]
     salida = RAIZ / "outputs" / f"grilla_viabilidad_{base}.csv"
     df = grilla(n, base)

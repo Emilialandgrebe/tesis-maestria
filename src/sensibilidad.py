@@ -35,11 +35,10 @@ from src.precio_estocastico import ParametrosPrecioAR1
 #   Sobol como el resto.
 # - precio_nivel_mult [0.625, 1.5]: multiplica TODA la trayectoria base de
 #   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
-#   del precio. Fijado para el caso en verde (4 USD/kg verde -> 2,5-6, el
-#   rango pesimista-optimista del bloque 9). En el caso base seco (desde
-#   2026-11-19, 7 USD/kg seco) cubre 4,4-10,5 USD/kg seco, más ancho que
-#   el rango del Excel (5-9, factores 0,71-1,29): revisarlo en el Sobol
-#   del Paso 7.
+#   del precio. Fijado para el caso en verde (caso base desde 2026-11-20;
+#   4 USD/kg verde -> 2,5-6, algo más ancho que el rango pesimista-optimista
+#   del bloque 9, 2,5-5,5). El Sobol principal es el bayesiano
+#   (PROBLEMA_SOBOL_BAYES, más abajo).
 PROBLEMA_SOBOL: dict = {
     "num_vars": 8,
     "names": [
@@ -377,8 +376,8 @@ def comparar_sensibilidad_ha_fija(
 # 7 variables, superficie fija en 120 ha. Respecto de PROBLEMA_SOBOL, el
 # nivel y el drift del precio (precio_nivel_mult, precio_drift_anual) se
 # reemplazan por el peso de la paridad de exportación w de la mezcla del
-# nivel mu (src/precio_bayesiano.py): w = 1 -> E[mu] = 5, w = 0 -> 9 USD/kg
-# seco. Como el escenario solo fija w, se corre UNA vez con w en [0, 1] (no
+# nivel mu (src/precio_bayesiano.py): en verde (caso base) w = 1 -> E[mu] =
+# 2,5, w = 0 -> 5,5 USD/kg verde. Como el escenario solo fija w, se corre UNA vez con w en [0, 1] (no
 # por escenario). factor_ars: tipo de cambio real, shock permanente sobre
 # los costos en pesos (ParametrosCostos.factor_ars), en [0,8; 1,2].
 PROBLEMA_SOBOL_BAYES: dict = {
