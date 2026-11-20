@@ -2177,6 +2177,23 @@ real y los Sobol guardados son del caso en verde.
    posterior con PyMC y propagarla al Monte Carlo (cada simulación sortea
    sus parámetros de la posterior), en lugar de usar valores puntuales.
    Ver también "Inferencia bayesiana pendiente" y Paso 4.
+   **Implementado (2026-11-19, rama `precio-bayesiano`)** con las
+   decisiones del equipo: `src/precio_bayesiano.py`, `modo_precio=
+   "bayesiano"`. (phi, sigma) de la posterior del AR(1) sobre FRED real
+   1991-2026 sin tendencia, prior phi ~ U(0, 1] y sigma ~ HalfNormal(0,3),
+   muestreada en forma exacta (conjugada + SIR, sin PyMC;
+   `scripts/calibrar_precio_bayesiano.py` →
+   `data/processed/posterior_precio.parquet`): phi mediana 0,869, IC90
+   [0,73; 0,98], P(phi > 0,95) = 13 %; sigma mediana 0,142. Nivel mu:
+   mezcla de lognormales centradas en la media 5 (exportación) y 9
+   (importación), desvío log 0,10; escenarios = pesos fijos (pesimista w =
+   1, base 0,5, optimista 0 → E[mu] = 5 / 7 / 9, igual que el Excel).
+   Arranque x_0 = 0. Prueba predictiva y sensibilidad a w en
+   `scripts/precio_bayesiano_predictiva.py`: P95/P5 del precio en el año 20
+   = 3,1 con w = 1 o 0 (AR(1) niveles 2,4; retornos 5,6; histórico FRED
+   2,4), 4,3 con la mezcla 50/50. Sensibilidad (base, 10.000): VAN medio
+   −0,46 M (w = 0) a −2,54 M (w = 1), P(VAN<0) 69 % a 99 %; con w = 0,5,
+   −1,49 M y 84 %.
 2. **Tipo de cambio real como variable estocástica.** Un `factor_ars` que
    multiplique los costos en pesos expresados en USD, en CAPEX y OPEX,
    usando la columna `moneda_pago` de `data/modelo_v2/{capex,opex}.csv`

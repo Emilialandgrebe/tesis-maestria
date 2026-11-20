@@ -15,6 +15,12 @@ from scipy.stats import triang as triang_dist
 
 from src.costos import HECTAREAS_REFERENCIA, ParametrosCostos, flujo_caja_neto, opex_total
 from src.modelo_v2 import cargar_modelo_v2
+from src.precio_bayesiano import (
+    ParametrosPrecioBayes,
+    mascara_venta,
+    simulate_prices_bayes,
+    simulate_prices_bayes_antitetico,
+)
 from src.precio_estocastico import (
     ParametrosPrecioAR1,
     simulate_prices_ar1,
@@ -451,8 +457,11 @@ class ParametrosMC:
     # lo hubiera decidido a propósito por función (feedback de Eze,
     # notas/PLAN_TESIS.md). "triangular" queda disponible como modo
     # explícito de comparación contra el modelo naive, no como default en
-    # ningún caller.
-    modo_precio: Literal["ar1", "triangular"] = "ar1"
+    # ningún caller. "bayesiano" (Paso 7, src/precio_bayesiano.py): AR(1) en
+    # niveles con (phi, sigma) sorteados de la posterior de FRED y nivel mu
+    # de la mezcla exportación/importación; el escenario fija el peso w.
+    # Solo para venta en seco.
+    modo_precio: Literal["ar1", "triangular", "bayesiano"] = "ar1"
 
     # Activa la variabilidad estocástica de OPEX (multiplicador de OPEX --
     # ver simulate_opex_multiplicador() más abajo). El nombre conserva
@@ -624,7 +633,10 @@ def _fijar_precio(
     precio del motor)."""
     if "precio" not in params.fuentes_fijas:
         return prices
-    if precio_params is not None and params.modo_precio == "ar1":
+    if isinstance(precio_params, ParametrosPrecioBayes):
+        # Precio fijo = nivel esperado E[mu] en los años con venta.
+        trayectoria = precio_params.nivel_esperado() * mascara_venta(params.n_años)
+    elif precio_params is not None and params.modo_precio == "ar1":
         trayectoria = precio_params.trayectoria_base(params.n_años)
     elif trayectoria_excel is not None:
         trayectoria = trayectoria_excel
@@ -917,7 +929,19 @@ def _resolver_precio_params(
     desde `costos.venta_verde`: None -> AR(1) del escenario de `params`;
     `venta_verde=None` -> se completa; distinta de la de `costos` -> error
     (ingresos con una base y precios con la otra).
+    Con `modo_precio="bayesiano"` devuelve un `ParametrosPrecioBayes` (el
+    del escenario si `precio_params` es None) y exige venta en seco.
     """
+    if params.modo_precio == "bayesiano":
+        if costos.venta_verde:
+            raise ValueError("modo_precio='bayesiano' solo está definido para venta en seco")
+        if precio_params is None:
+            return ParametrosPrecioBayes(escenario=params.escenario, venta_verde=False)
+        if not isinstance(precio_params, ParametrosPrecioBayes):
+            raise TypeError("modo_precio='bayesiano' requiere ParametrosPrecioBayes")
+        return precio_params
+    if isinstance(precio_params, ParametrosPrecioBayes):
+        raise TypeError("ParametrosPrecioBayes requiere modo_precio='bayesiano'")
     if precio_params is None:
         return ParametrosPrecioAR1(escenario=params.escenario, venta_verde=costos.venta_verde)
     if precio_params.venta_verde is None:
@@ -954,8 +978,13 @@ def _despachar_precios(
         return simulate_prices_ar1(params.n_simulaciones, params.n_años, precio_params, rng)
     if params.modo_precio == "triangular":
         return simulate_prices(params, rng, trayectoria)
+    if params.modo_precio == "bayesiano":
+        if precio_params is None:
+            precio_params = ParametrosPrecioBayes(escenario=params.escenario)
+        return simulate_prices_bayes(params.n_simulaciones, params.n_años, precio_params, rng)
     raise ValueError(
-        f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
+        "modo_precio debe ser 'ar1', 'triangular' o 'bayesiano', "
+        f"recibido {params.modo_precio!r}"
     )
 
 
@@ -979,8 +1008,15 @@ def _despachar_precios_antitetico(
         )
     if params.modo_precio == "triangular":
         return simulate_prices_antitetico(params, rng, trayectoria)
+    if params.modo_precio == "bayesiano":
+        if precio_params is None:
+            precio_params = ParametrosPrecioBayes(escenario=params.escenario)
+        return simulate_prices_bayes_antitetico(
+            params.n_simulaciones, params.n_años, precio_params, rng
+        )
     raise ValueError(
-        f"modo_precio debe ser 'ar1' o 'triangular', recibido {params.modo_precio!r}"
+        "modo_precio debe ser 'ar1', 'triangular' o 'bayesiano', "
+        f"recibido {params.modo_precio!r}"
     )
 
 
