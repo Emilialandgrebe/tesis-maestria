@@ -35,9 +35,11 @@ from src.precio_estocastico import ParametrosPrecioAR1
 #   Sobol como el resto.
 # - precio_nivel_mult [0.625, 1.5]: multiplica TODA la trayectoria base de
 #   precio (ParametrosPrecioAR1.nivel_mult): incertidumbre sobre el nivel
-#   del precio. En el caso base (venta en verde, 4 USD/kg verde) cubre
-#   2,5-6 USD/kg verde, el rango entre el pesimista y el optimista del
-#   Excel (bloque 9). Asimétrico porque los escenarios lo son.
+#   del precio. Fijado para el caso en verde (4 USD/kg verde -> 2,5-6, el
+#   rango pesimista-optimista del bloque 9). En el caso base seco (desde
+#   2026-11-19, 7 USD/kg seco) cubre 4,4-10,5 USD/kg seco, más ancho que
+#   el rango del Excel (5-9, factores 0,71-1,29): revisarlo en el Sobol
+#   del Paso 7.
 PROBLEMA_SOBOL: dict = {
     "num_vars": 8,
     "names": [
@@ -366,3 +368,115 @@ def comparar_sensibilidad_ha_fija(
         ruta_salida=ruta,
         fijos={"hectareas": HECTAREAS_PLAN},
     )
+
+
+# ---------------------------------------------------------------------------
+# Sobol con el precio bayesiano (Paso 7)
+# ---------------------------------------------------------------------------
+
+# 7 variables, superficie fija en 120 ha. Respecto de PROBLEMA_SOBOL, el
+# nivel y el drift del precio (precio_nivel_mult, precio_drift_anual) se
+# reemplazan por el peso de la paridad de exportación w de la mezcla del
+# nivel mu (src/precio_bayesiano.py): w = 1 -> E[mu] = 5, w = 0 -> 9 USD/kg
+# seco. Como el escenario solo fija w, se corre UNA vez con w en [0, 1] (no
+# por escenario). factor_ars: tipo de cambio real, shock permanente sobre
+# los costos en pesos (ParametrosCostos.factor_ars), en [0,8; 1,2].
+PROBLEMA_SOBOL_BAYES: dict = {
+    "num_vars": 7,
+    "names": [
+        "tasa_descuento",
+        "precision_factor_frio",
+        "precision_factor_calor",
+        "p_bajo_si_alto",
+        "capex_extra_pct",
+        "peso_exportacion",
+        "factor_ars",
+    ],
+    "bounds": [
+        [0.10, 0.18],
+        [5.0, 30.0],
+        [5.0, 30.0],
+        [0.50, 0.80],
+        [0.0, 0.30],
+        [0.0, 1.0],
+        [0.8, 1.2],
+    ],
+}
+METRICAS_BAYES = ("van_neto_medio_usd", "cvar_10_usd")
+
+
+def _evaluar_bayes(fila: np.ndarray, n_simulaciones: int, semilla: int) -> tuple[float, float]:
+    """Una simulación completa con el precio bayesiano; devuelve (VAN medio,
+    CVaR 10 %) de la MISMA corrida. Semilla fija, como `_evaluar_metrica`."""
+    from src.precio_bayesiano import ParametrosPrecioBayes
+
+    (tasa, frio, calor, p_bajo, capex_extra, w, factor_ars) = fila
+    params = ParametrosMC(
+        n_simulaciones=n_simulaciones,
+        hectareas=HECTAREAS_PLAN,
+        tasa_descuento=tasa,
+        precision_factor_frio=frio,
+        precision_factor_calor=calor,
+        p_bajo_si_alto=p_bajo,
+        semilla=semilla,
+        capex_opex_estocastico=False,
+        correlacionar_frio_calor=False,
+        modo_precio="bayesiano",
+        # factor_ars es una variable barrida por Sobol: no se sortea además.
+        factor_ars_estocastico=False,
+    )
+    costos = ParametrosCostos(
+        hectareas=HECTAREAS_PLAN, capex_factor=1.0 + capex_extra, factor_ars=factor_ars
+    )
+    df = run_monte_carlo_antitetico(params, costos, ParametrosPrecioBayes(peso_exportacion=w))
+    van = resumen_financiero(df, costos)["van_neto_usd"].to_numpy()
+    n_peores = max(1, int(np.ceil(0.10 * len(van))))
+    return float(van.mean()), float(np.sort(van)[:n_peores].mean())
+
+
+def analizar_sobol_bayes(
+    n_base: int = 256,
+    n_simulaciones: int = 1_000,
+    semilla: int = 42,
+    ruta_salida: Path | str | None = None,
+) -> pd.DataFrame:
+    """
+    Sobol (S1 y ST) sobre PROBLEMA_SOBOL_BAYES para el VAN medio y el CVaR
+    10 % (las dos métricas salen de las mismas N * (7 + 2) evaluaciones).
+    Guarda en data/processed/sobol_indices_bayes.parquet (columna `metrica`).
+    """
+    problema = PROBLEMA_SOBOL_BAYES
+    muestra = sobol_sample.sample(problema, n_base, calc_second_order=False, seed=semilla)
+    total = muestra.shape[0]
+    print(f"[bayes] {total} evaluaciones (N={n_base} x {problema['num_vars'] + 2})...")
+    salidas = np.empty((total, 2))
+    inicio = time.time()
+    paso = max(1, total // 20)
+    for i, fila in enumerate(muestra):
+        salidas[i] = _evaluar_bayes(fila, n_simulaciones, semilla)
+        if (i + 1) % paso == 0 or (i + 1) == total:
+            print(f"[bayes] {i + 1}/{total} ({time.time() - inicio:.0f}s)")
+
+    resultados = []
+    for j, metrica in enumerate(METRICAS_BAYES):
+        ind = sobol_analyze.analyze(
+            problema, salidas[:, j], calc_second_order=False, print_to_console=False, seed=semilla
+        )
+        resultados.append(pd.DataFrame({
+            "parametro": problema["names"],
+            "S1": ind["S1"], "S1_conf": ind["S1_conf"],
+            "ST": ind["ST"], "ST_conf": ind["ST_conf"],
+            "metrica": metrica,
+        }))
+    combinado = pd.concat(resultados, ignore_index=True)
+    if ruta_salida is None:
+        ruta_salida = Path(__file__).resolve().parents[1] / "data" / "processed" / "sobol_indices_bayes.parquet"
+    ruta_salida = Path(ruta_salida)
+    ruta_salida.parent.mkdir(parents=True, exist_ok=True)
+    combinado.to_parquet(ruta_salida)
+    # Salidas crudas, para poder re-analizar sin volver a simular.
+    pd.DataFrame(np.column_stack([muestra, salidas]),
+                 columns=problema["names"] + list(METRICAS_BAYES)).to_parquet(
+        ruta_salida.with_name(ruta_salida.stem + "_evaluaciones.parquet"))
+    print(f"Guardado en {ruta_salida}")
+    return combinado

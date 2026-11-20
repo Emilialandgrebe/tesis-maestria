@@ -26,7 +26,7 @@ vez de redondearse a planta entera como en Supuestos!B16.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -46,8 +46,12 @@ HECTAREAS_REFERENCIA = _MODELO.supuestos["hectareas_referencia"]
 # proporcion_precio_productor=...)`.
 FACTOR_CONVERSION_SECO = _MODELO.supuestos["factor_conversion_seco"]
 PROPORCION_PRECIO_PRODUCTOR = _MODELO.supuestos["proporcion_precio_productor"]
+# Interruptor de precio al productor (Supuestos!B72). Caso base (2026-11-19):
+# 0, porque los precios del bloque 6 ya son al productor del seco con cáscara.
+PRECIO_AL_PRODUCTOR = bool(_MODELO.supuestos["precio_al_productor"])
 
-# Caso base (Supuestos, bloque 9): venta en verde a la procesadora.
+# Bloque 9: venta en verde a la procesadora. Caso base desde 2026-11-19:
+# 0 (venta en SECO con cáscara); la venta en verde queda como alternativa.
 VENTA_VERDE = _MODELO.venta_verde
 
 # Variación estructural del OPEX respecto del valor del Excel: triangular
@@ -89,27 +93,30 @@ class ParametrosCostos:
     cambia la base imponible de Ganancias, no la caja. Ver
     `opex_pre_activado()`. Tratamiento fiscal a confirmar con el contador.
 
-    Base de ingresos. El rendimiento de la curva está en kg VERDES (recién
-    cosechados).
+    Base de ingresos. Caso base (desde 2026-11-19): la finca vende SECO con
+    cáscara. El rendimiento de la curva (3.000 kg/ha a plena producción) ya
+    está en kg secos con cáscara.
 
-    `venta_verde=True` (caso base, Supuestos bloque 9 / B78): la finca vende
-    en verde a la procesadora. Ingresos = kg verdes * precio en verde, sin
-    conversión ni maquila; la trayectoria de precio es la en verde
-    (`ModeloV2.trayectoria_precio(..., venta_verde=True)`) y los
-    interruptores del bloque 8 no se usan.
+    `venta_verde=False` (caso base, Supuestos B78 = 0): bloque 8.
 
-    `venta_verde=False`: bloque 8. Los precios son de MERCADO del producto
-    procesado; con los dos interruptores encendidos:
+        kg vendidos     = kg de rendimiento * factor_conversion_seco
+        precio recibido = precio de referencia * proporcion_precio_productor
+        ingresos        = kg vendidos * precio recibido
+        maquila         = costo por kg seco * kg vendidos
 
-        kg secos       = kg verdes * factor_conversion_seco
-        precio recibido = precio de mercado * proporcion_precio_productor
-        ingresos       = kg secos * precio recibido
-        maquila        = costo por kg seco * kg secos
+    En el Excel: conversión B71 = 1,00 (el rendimiento ya es seco) y
+    precio al productor apagado (B72 = 0, `precio_al_productor=False`),
+    porque los precios del bloque 6 (5 / 7 / 9 USD/kg seco) ya son al
+    productor. La maquila de pelado y secado (0,40 USD/kg seco) la paga la
+    finca. `convertir_a_seco=False` fuerza factor 1 y `precio_al_productor=
+    False` proporción 1: los dos apagados reproducen el plan original. Ver
+    `kg_vendidos()` y `precio_recibido()`.
 
-    `convertir_a_seco=False` usa factor 1 (kg verdes = kg vendidos) y
-    `precio_al_productor=False` usa proporción 1 (la finca cobra el precio
-    de mercado, Supuestos!B72 = 0): los dos apagados reproducen el plan
-    original. Ver `kg_vendidos()` y `precio_recibido()`.
+    `venta_verde=True` (alternativa, Supuestos bloque 9): la finca vende en
+    verde a la procesadora. El rendimiento se lee como kg verdes; ingresos
+    = kg verdes * precio en verde, sin conversión ni maquila; la trayectoria
+    de precio es la en verde (`ModeloV2.trayectoria_precio(...,
+    venta_verde=True)`) y los interruptores del bloque 8 no se usan.
 
     Sincronizar `hectareas` con `ParametrosMC.hectareas` es responsabilidad
     de quien arma la simulación (`run_monte_carlo()` lo hace automático).
@@ -126,8 +133,15 @@ class ParametrosCostos:
     venta_verde: bool = VENTA_VERDE
     convertir_a_seco: bool = True
     factor_conversion_seco: float = FACTOR_CONVERSION_SECO
-    precio_al_productor: bool = True
+    precio_al_productor: bool = PRECIO_AL_PRODUCTOR
     proporcion_precio_productor: float = PROPORCION_PRECIO_PRODUCTOR
+    # Tipo de cambio real (Paso 7): multiplica, en USD, los costos que se
+    # pagan en pesos (columna `moneda_pago` == "ARS" de capex.csv/opex.csv,
+    # más los sueldos de la hoja Personal y la maquila). Constante en los 20
+    # años: shock permanente. < 1 = devaluación real (los pesos cuestan
+    # menos USD); > 1 = atraso cambiario. No toca ítems en USD, IIBB (es %
+    # de ventas en USD) ni el valor residual de la tierra (USD).
+    factor_ars: float = 1.0
     modelo: ModeloV2 = field(default=_MODELO, repr=False)
 
     def __post_init__(self) -> None:
@@ -145,6 +159,8 @@ class ParametrosCostos:
             )
         if self.capex_factor <= 0:
             raise ValueError(f"capex_factor debe ser > 0; recibido {self.capex_factor!r}")
+        if self.factor_ars <= 0:
+            raise ValueError(f"factor_ars debe ser > 0; recibido {self.factor_ars!r}")
         if self.hectareas <= 0:
             raise ValueError(f"hectareas debe ser > 0; recibido {self.hectareas!r}")
         if int(self.quebrantos_anios) != self.quebrantos_anios or self.quebrantos_anios < 1:
@@ -174,8 +190,9 @@ class ParametrosCostos:
 
     @property
     def factor_kg_vendidos(self) -> float:
-        """kg vendidos por kg verde (Producción!8): 1 en venta en verde; si
-        no, el factor de conversión, o 1 si está apagada."""
+        """kg vendidos por kg de rendimiento (Producción!8): 1 en venta en
+        verde; si no, el factor de conversión (1,00 en el caso base), o 1 si
+        está apagada."""
         if self.venta_verde or not self.convertir_a_seco:
             return 1.0
         return self.factor_conversion_seco
@@ -211,16 +228,22 @@ class ParametrosCostos:
             default=items["cantidad"],
         )
 
+    def _factor_moneda(self, items: pd.DataFrame) -> np.ndarray:
+        """`factor_ars` en los ítems pagados en pesos, 1 en los de USD."""
+        return np.where(items["moneda_pago"].to_numpy() == "ARS", self.factor_ars, 1.0)
+
     # ------------------------------------------------------------------
     # CAPEX, amortizaciones y valor residual
     # ------------------------------------------------------------------
 
     @property
     def capex_items(self) -> pd.DataFrame:
-        """Hoja CAPEX escalada: agrega `total_escalado_usd` (con capex_factor)."""
+        """Hoja CAPEX escalada: agrega `total_escalado_usd` (con capex_factor
+        y, en los ítems en pesos, factor_ars)."""
         items = self.modelo.capex.copy()
         items["total_escalado_usd"] = (
             self._cantidad_escalada(items) * items["precio_unit_usd"] * self.capex_factor
+            * self._factor_moneda(items)
         )
         return items
 
@@ -263,7 +286,8 @@ class ParametrosCostos:
     # ------------------------------------------------------------------
 
     def costo_personal(self, n_años: int) -> np.ndarray:
-        """Costo laboral total por año 1..n_años (hoja Personal, fila 14)."""
+        """Costo laboral total por año 1..n_años (hoja Personal, fila 14).
+        Los sueldos se pagan en pesos: incluye `factor_ars`."""
         s = self.modelo.supuestos
         t = np.arange(1, n_años + 1)
 
@@ -281,7 +305,7 @@ class ParametrosCostos:
         )
         operarios = s["salario_operario_usd_mes"] * indice_salarial * 12 * dotacion
         encargados = s["salario_encargado_usd_mes"] * indice_salarial * 12 * s["encargados"]
-        return operarios + encargados
+        return (operarios + encargados) * self.factor_ars
 
     def _aplica_por_año(self, aplica_en: pd.Series, n_años: int) -> np.ndarray:
         """Máscara (n_items, n_años): si cada ítem corre en cada año (OPEX!H)."""
@@ -303,7 +327,10 @@ class ParametrosCostos:
         """
         opex = self.modelo.opex
         fijos = opex[opex["tipo"] == "fijo_anual"]
-        costo = self._cantidad_escalada(fijos) * fijos["precio_unit_usd"].to_numpy()
+        costo = (
+            self._cantidad_escalada(fijos) * fijos["precio_unit_usd"].to_numpy()
+            * self._factor_moneda(fijos)
+        )
 
         rampa = self.modelo.rampa_fertilizacion(n_años).reshape(1, -1)
         factor_rampa = np.where(fijos["rampa"].to_numpy().reshape(-1, 1), rampa, 1.0)
@@ -319,7 +346,8 @@ class ParametrosCostos:
         if self.venta_verde:
             return 0.0
         opex = self.modelo.opex
-        return float(opex.loc[opex["tipo"] == "por_kg", "precio_unit_usd"].sum())
+        por_kg = opex[opex["tipo"] == "por_kg"]
+        return float((por_kg["precio_unit_usd"] * self._factor_moneda(por_kg)).sum())
 
     @property
     def alicuota_iibb(self) -> float:
@@ -337,11 +365,31 @@ def costo_operativo_anual(año: int, params: ParametrosCostos) -> float:
     return float(params.opex_fijo(año)[año - 1])
 
 
+def _con_factor_ars_doble(params: ParametrosCostos) -> ParametrosCostos:
+    """Copia con factor_ars duplicado. Todos los costos son LINEALES en
+    factor_ars, así que X(2a) - X(a) es la parte en pesos de X evaluada en
+    a, y X(a * u) = X(a) + (u - 1) * [X(2a) - X(a)]."""
+    return replace(params, factor_ars=2.0 * params.factor_ars)
+
+
+def partes_ars(params: ParametrosCostos, n_años: int) -> dict[str, np.ndarray | float]:
+    """Parte en pesos (a factor_ars = params.factor_ars) del CAPEX, las
+    amortizaciones, el OPEX fijo y la maquila por kg."""
+    doble = _con_factor_ars_doble(params)
+    return {
+        "capex": doble.capex_inicial - params.capex_inicial,
+        "amortizaciones": doble.amortizaciones(n_años) - params.amortizaciones(n_años),
+        "opex_fijo": doble.opex_fijo(n_años) - params.opex_fijo(n_años),
+        "costo_por_kg": doble.costo_por_kg - params.costo_por_kg,
+    }
+
+
 def opex_total(
     produccion_kg: np.ndarray,
     ingresos_usd: np.ndarray,
     params: ParametrosCostos,
     opex_multiplicador: np.ndarray,
+    factor_ars_sim: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     OPEX total por simulación y año (OPEX!D68):
@@ -356,9 +404,20 @@ def opex_total(
     opex_multiplicador : np.ndarray
         Forma (n_simulaciones,). UN valor por simulación, aplicado a todos
         los años (ver `simulate_opex_multiplicador()` en src/monte_carlo.py).
+    factor_ars_sim : np.ndarray, opcional
+        Forma (n_simulaciones,). Sorteo del tipo de cambio real por
+        simulación (multiplica a `params.factor_ars`): escala la parte en
+        pesos del OPEX fijo y de la maquila. None = sin sorteo.
     """
     n, T = produccion_kg.shape
-    operativo = params.opex_fijo(T).reshape(1, T) + params.costo_por_kg * produccion_kg
+    fijo = params.opex_fijo(T).reshape(1, T)
+    por_kg = params.costo_por_kg
+    if factor_ars_sim is not None:
+        ars = partes_ars(params, T)
+        u = np.asarray(factor_ars_sim, dtype=float).reshape(n, 1) - 1.0
+        fijo = fijo + u * ars["opex_fijo"].reshape(1, T)
+        por_kg = por_kg + u * ars["costo_por_kg"]
+    operativo = fijo + por_kg * produccion_kg
     multiplicador = np.asarray(opex_multiplicador).reshape(n, 1)
     return operativo * multiplicador + params.alicuota_iibb * ingresos_usd
 
@@ -445,6 +504,7 @@ def flujo_caja_neto(
     ingresos_usd: np.ndarray,
     opex_usd: np.ndarray,
     params: ParametrosCostos,
+    factor_ars_sim: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """
     Flujo libre del proyecto por simulación y año 1..T, sin el CAPEX del
@@ -465,10 +525,18 @@ def flujo_caja_neto(
     dict con "ebitda", "opex_pre_activado", "amortizacion_implantacion",
     "base_imponible", "quebrantos_utilizados", "impuesto_ganancias" y
     "flujo_neto", cada uno de la misma forma que `ingresos_usd`.
+
+    `factor_ars_sim` (n_simulaciones,): sorteo del tipo de cambio real por
+    simulación; escala la parte en pesos de las amortizaciones (el CAPEX en
+    pesos cambia, y con él el escudo fiscal).
     """
-    T = ingresos_usd.shape[1]
+    n, T = ingresos_usd.shape
     ebitda = ingresos_usd - opex_usd
-    ebit = ebitda - params.amortizaciones(T).reshape(1, T)
+    amort = params.amortizaciones(T).reshape(1, T)
+    if factor_ars_sim is not None:
+        u = np.asarray(factor_ars_sim, dtype=float).reshape(n, 1) - 1.0
+        amort = amort + u * partes_ars(params, T)["amortizaciones"].reshape(1, T)
+    ebit = ebitda - amort
     activado, amort_implantacion = opex_pre_activado(opex_usd, params)
     base = ebit + activado - amort_implantacion
     if params.quebrantos:

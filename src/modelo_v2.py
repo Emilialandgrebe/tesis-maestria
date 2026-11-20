@@ -10,11 +10,11 @@ escenario, rampa de fertilización).
 Hay dos juegos de precios por escenario, planos en los años 7-20, en USD
 constantes 2026:
 
-- en VERDE (Supuestos, bloque 9; caso base, venta_verde = 1): lo que paga
-  la procesadora por kg verde recién cosechado, 2,5 / 4 / 6 USD/kg;
-- de MERCADO del producto procesado (seco con cáscara, bloque 6): 6 / 8 /
-  10 USD/kg, que se usan con venta_verde = 0 junto con la conversión y el
-  precio al productor del bloque 8 (`src/costos.py`).
+- SECO con cáscara al productor (bloque 6; caso base desde 2026-11-19,
+  venta_verde = 0): 5 / 7 / 9 USD/kg seco, junto con el bloque 8
+  (conversión 1,00 y proporción al productor apagada, `src/costos.py`);
+- en VERDE (bloque 9; alternativa, venta_verde = 1): lo que paga la
+  procesadora por kg verde recién cosechado, 2,5 / 4 / 6 USD/kg verde.
 
 Todas las series anuales se devuelven indexadas por año del proyecto 1..20
 (el año 0 del Excel solo tiene CAPEX, que el motor maneja aparte).
@@ -77,7 +77,8 @@ class ModeloV2:
 
     @property
     def venta_verde(self) -> bool:
-        """Caso base del Excel (Supuestos!B78): True = venta en verde."""
+        """Supuestos!B78: True = venta en verde (alternativa); False = venta
+        en seco con cáscara (caso base desde 2026-11-19)."""
         return bool(self.supuestos["venta_verde"])
 
     def trayectoria_precio(

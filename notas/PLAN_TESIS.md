@@ -2156,6 +2156,19 @@ palanca de costos sola lleva el VAN a 0 (−99 % de CAPEX: VAN −668k; −100 %
 de OPEX: −118k); TIR real 1,42 %; precio en verde para VAN = 0: 9,52 USD/kg
 (7,39 con −50 % de CAPEX). Exposición máxima de caja: 40.144 USD/ha.
 
+### Cambio de caso base: venta en seco con cáscara (2026-11-19, rama `caso-base-seco`)
+
+La finca vende SECO con cáscara: Supuestos B78 = 0, conversión B71 = 1,00
+(los 3.000 kg/ha ya son secos), precio al productor apagado (B72 = 0;
+los precios del bloque 6 ya son al productor: 5 / 7 / 9 USD/kg seco,
+planos años 7-20) y maquila de pelado y secado activa (0,40 USD/kg seco).
+VAN determinístico: base −1.487.137,36, pesimista −2.512.883,25, optimista
+−468.952,76 (TIR base 9,15 %). Monte Carlo (10.000, niveles): VAN medio
+base −1,47 M, P(VAN<0) 96 % (pesimista 100 %, optimista 71 %). El precio
+explica ~79 % de la varianza del VAN. La venta en verde queda como
+alternativa (sus VAN no cambian). Los análisis de palancas y tipo de cambio
+real y los Sobol guardados son del caso en verde.
+
 ### Paso 7 — próximos pasos (anotados 2026-11-19, sin implementar)
 
 1. **Precio bayesiano** (pedido de Ezequiel). Poner priors sobre los
@@ -2164,7 +2177,37 @@ de OPEX: −118k); TIR real 1,42 %; precio en verde para VAN = 0: 9,52 USD/kg
    posterior con PyMC y propagarla al Monte Carlo (cada simulación sortea
    sus parámetros de la posterior), en lugar de usar valores puntuales.
    Ver también "Inferencia bayesiana pendiente" y Paso 4.
-2. **Tipo de cambio real como variable estocástica.** Un `factor_ars` que
+   **Implementado (2026-11-19, rama `precio-bayesiano`)** con las
+   decisiones del equipo: `src/precio_bayesiano.py`, `modo_precio=
+   "bayesiano"`. (phi, sigma) de la posterior del AR(1) sobre FRED real
+   1991-2026 sin tendencia, prior phi ~ U(0, 1] y sigma ~ HalfNormal(0,3),
+   muestreada en forma exacta (conjugada + SIR, sin PyMC;
+   `scripts/calibrar_precio_bayesiano.py` →
+   `data/processed/posterior_precio.parquet`): phi mediana 0,869, IC90
+   [0,73; 0,98], P(phi > 0,95) = 13 %; sigma mediana 0,142. Nivel mu:
+   mezcla de lognormales centradas en la media 5 (exportación) y 9
+   (importación), desvío log 0,10; escenarios = pesos fijos (pesimista w =
+   1, base 0,5, optimista 0 → E[mu] = 5 / 7 / 9, igual que el Excel).
+   Arranque x_0 = 0. Prueba predictiva y sensibilidad a w en
+   `scripts/precio_bayesiano_predictiva.py`: P95/P5 del precio en el año 20
+   = 3,1 con w = 1 o 0 (AR(1) niveles 2,4; retornos 5,6; histórico FRED
+   2,4), 4,3 con la mezcla 50/50. Sensibilidad (base, 10.000): VAN medio
+   −0,46 M (w = 0) a −2,54 M (w = 1), P(VAN<0) 69 % a 99 %; con w = 0,5,
+   −1,49 M y 84 %.
+   **Sobol bayesiano (2026-11-19):** `analizar_sobol_bayes()` en
+   `src/sensibilidad.py`, una sola corrida (el escenario solo fija w, así
+   que w se barre en [0, 1]), 7 variables, 120 ha fijas, n_base = 256
+   (2.304 evaluaciones × 1.000 simulaciones), VAN medio y CVaR 10 % de las
+   mismas evaluaciones → `data/processed/sobol_indices_bayes.parquet`.
+   ST sobre el VAN medio: w 0,56 (±0,09), tasa 0,32 (±0,06), factor_ars
+   0,13 (±0,02), recargo de CAPEX 0,04; clima y vecería ≈ 0. ST sobre el
+   CVaR 10 %: w 0,44 (±0,08), factor_ars 0,42 (±0,07), CAPEX 0,13, tasa
+   0,04. Modelo casi aditivo (ΣS1 ≈ 0,97-0,98).
+2. **Tipo de cambio real como variable estocástica.** Implementado como
+   `ParametrosCostos.factor_ars` (2026-11-19): shock permanente sobre los
+   costos en pesos según `moneda_pago` (CAPEX, OPEX, sueldos y maquila),
+   barrido en Sobol en [0,8; 1,2]. Falta, si se quiere, sortearlo por
+   simulación dentro del Monte Carlo (hoy es un parámetro). Un `factor_ars` que
    multiplique los costos en pesos expresados en USD, en CAPEX y OPEX,
    usando la columna `moneda_pago` de `data/modelo_v2/{capex,opex}.csv`
    (hoy ningún cálculo la lee). Referencia determinística ya calculada en
