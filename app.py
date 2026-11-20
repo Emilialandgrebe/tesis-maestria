@@ -6,17 +6,18 @@ Fase 4. Esta app es SOLO consumidora del motor (`src/monte_carlo.py`,
 Secciones:
 - Distribución del VAN al año 20 (histograma + métricas).
 - Trayectoria por año (fan charts P10/P50/P90 de producción, precio, ingreso y VAN).
-- Sensibilidad de Sobol (tornado de ST, pre-calculado en
-  `data/processed/sobol_indices_ha_fija.parquet`, con la superficie fija en
-  120 ha -- NO se recalcula en vivo).
+- Sensibilidad de Sobol (tornados de ST del VAN medio y del CVaR 10 %,
+  pre-calculados con el precio bayesiano en
+  `data/processed/sobol_indices_bayes.parquet`, superficie fija en 120 ha --
+  NO se recalcula en vivo).
 - Comparación de los tres escenarios de precio a los parámetros del sidebar.
 
 El sidebar incluye los dos interruptores fiscales del Excel: traslado de
 quebrantos (encendido por defecto, caso base) y activación del OPEX
 pre-productivo como costo de implantación (apagado por defecto,
 sensibilidad). Aplican a todas las pestañas salvo Sobol, que está
-pre-calculado con el caso fiscal y la calibración climática anteriores
-(sin quebrantos, clima Best Match). También incluye el escenario de estrés
+pre-calculado con el caso base (quebrantos sí, activación no, sin estrés
+climático). También incluye el escenario de estrés
 climático (tendencia de frío y calor de ERA5-Land, sin renormalizar).
 
 Ejecutar:  streamlit run app.py
@@ -49,8 +50,13 @@ from src.precio_estocastico import precio_retornos_estres  # noqa: E402
 SEMILLA = 42  # fija, igual que el default del motor (reproducibilidad)
 ESCENARIOS = ["pesimista", "base", "optimista"]
 COLOR_ESCENARIO = {"pesimista": "#C44E52", "base": "#4C72B0", "optimista": "#55A868"}
-RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices_ha_fija.parquet"
-_NOMBRE_PRECIO = {"ar1": "AR(1) en niveles", "ar1_retornos": "AR(1) retornos (estrés)", "triangular": "triangular"}
+RUTA_SOBOL = _RAIZ / "data" / "processed" / "sobol_indices_bayes.parquet"
+_NOMBRE_PRECIO = {
+    "ar1": "AR(1) en niveles",
+    "ar1_retornos": "AR(1) retornos (estrés)",
+    "triangular": "triangular",
+    "bayesiano": "bayesiano",
+}
 # Etiqueta del sidebar -> variante de ParametrosMC (None = sin estrés).
 _ESTRES_CLIMATICO = {
     "Sin estrés": None,
@@ -67,7 +73,10 @@ _NOMBRE_PARAMETRO = {
     "p_bajo_si_alto": "Vecería: P(año bajo | alto)",
     "precision_factor_frio": "Precisión del factor de frío",
     "precision_factor_calor": "Precisión del factor de calor",
+    "peso_exportacion": "Peso de la paridad de exportación (w)",
+    "factor_ars": "Tipo de cambio real (costos en pesos)",
 }
+_NOMBRE_METRICA = {"van_neto_medio_usd": "VAN medio", "cvar_10_usd": "CVaR 10%"}
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +190,7 @@ def simular(
     quebrantos: bool = True,
     activar_opex_pre: bool = False,
     estres_climatico: str | None = None,
+    factor_ars_estocastico: bool = False,
 ) -> dict:
     """Corre `run_monte_carlo()` una vez y devuelve lo que necesita la UI.
 
@@ -210,6 +220,7 @@ def simular(
         semilla=semilla,
         estres_climatico=estres_climatico is not None,
         estres_variante=estres_climatico or "puntual",
+        factor_ars_estocastico=factor_ars_estocastico,
     )
     costos = ParametrosCostos(
         hectareas=hectareas, quebrantos=quebrantos, activar_opex_pre=activar_opex_pre
@@ -276,14 +287,18 @@ with st.sidebar:
             "bloque 6). La finca paga la maquila de pelado y secado (0,40 "
             "USD/kg seco). La venta en verde queda como alternativa. El modelo "
             "probabilístico que genera la trayectoria de precio alrededor "
-            "de ese ancla se elige abajo, en 'Modelo de precio'."
+            "de ese ancla se elige abajo, en 'Modelo de precio'. En el modelo "
+            "bayesiano el escenario fija el peso w de la paridad de "
+            "exportación: pesimista w = 1 (nivel medio 5), base 0,5 (7) y "
+            "optimista 0 (9)."
         ),
     )
 
     modo_precio = st.selectbox(
-        "Modelo de precio", options=["ar1", "ar1_retornos", "triangular"], index=0,
+        "Modelo de precio", options=["ar1", "bayesiano", "ar1_retornos", "triangular"], index=0,
         format_func=lambda m: {
             "ar1": "AR(1) en niveles, revierte al nivel (principal)",
+            "bayesiano": "Bayesiano: posterior de FRED y paridades exportación/importación",
             "ar1_retornos": "AR(1) sobre retornos, sin reversión (estrés)",
             "triangular": "Triangular independiente por año (naive)",
         }[m],
@@ -292,6 +307,12 @@ with st.sidebar:
             "alrededor del nivel constante del Excel y vuelve a él (semivida "
             "~4 años), calibrado con la serie real deflactada de FRED "
             "(WPU01190106) -- ver src/precio_estocastico.py. "
+            "Bayesiano (Paso 7, src/precio_bayesiano.py): mismo AR(1) en "
+            "niveles, pero phi y sigma se sortean por simulación de la "
+            "posterior de FRED (phi mediana 0,87, IC90 0,73–0,98: admite raíz "
+            "unitaria) y el nivel de largo plazo es una mezcla de la paridad "
+            "de exportación (~5 USD/kg) y la de importación (~9), con peso w "
+            "según el escenario. "
             "AR(1) sobre retornos: el desvío no revierte y la dispersión del "
             "año 20 duplica el rango histórico; se usa como estrés. "
             "Triangular: ESCENARIOS_PRECIO, independiente por año sin "
@@ -300,6 +321,20 @@ with st.sidebar:
         ),
     )
 
+    if modo_precio == "bayesiano":
+        factor_ars_estocastico = st.checkbox(
+            "Tipo de cambio real estocástico", value=True,
+            help=(
+                "Un sorteo por simulación, Uniforme(0,8; 1,2), constante en los "
+                "20 años: shock permanente sobre los costos que se pagan en "
+                "pesos (CAPEX, OPEX, sueldos y maquila, según moneda_pago). "
+                "< 1 = devaluación real, > 1 = atraso cambiario. Activado por "
+                "defecto en el modo bayesiano."
+            ),
+        )
+    else:
+        factor_ars_estocastico = False
+
     _TASA_EXCEL = 0.1423
     tasa_descuento = st.select_slider(
         "Tasa de descuento real",
@@ -307,12 +342,12 @@ with st.sidebar:
         value=_TASA_EXCEL,
         format_func=lambda t: _pct(t, 2),
         help=(
-            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el último "
-            "Sobol del VAN medio (caso anterior, venta en verde; rango 10–18%, "
-            "superficie fija en 120 ha) pesa S_T ≈ 0,07 en el pesimista, 0,11 "
-            "en el base y 0,24 en el optimista; la variable dominante es el "
-            "nivel del precio (S_T ≈ 0,67–0,75). Se regenera para el caso seco "
-            "en el Paso 7."
+            "Tasa real en USD (hoja Tasa del Excel v2: 14,23%). En el Sobol "
+            "con el precio bayesiano (caso seco, rango 10–18%, 120 ha fijas) "
+            "es la segunda variable del VAN medio (S_T ≈ 0,32, detrás del peso "
+            "de la paridad w, 0,56), pero casi no pesa en el CVaR 10% (≈ 0,04): "
+            "en la cola mala dominan la inversión y los costos de los primeros "
+            "años, que la tasa casi no descuenta."
         ),
     )
 
@@ -389,6 +424,7 @@ _args_comunes = dict(
     quebrantos=bool(quebrantos),
     activar_opex_pre=bool(activar_opex_pre),
     estres_climatico=_ESTRES_CLIMATICO[estres_etiqueta],
+    factor_ars_estocastico=bool(factor_ars_estocastico),
 )
 
 with st.spinner("Corriendo Monte Carlo…"):
@@ -534,59 +570,62 @@ with tab_sobol:
         )
     else:
         sobol = cargar_sobol(str(RUTA_SOBOL))
-        disponibles = list(sobol["escenario"].unique())
-        if escenario in disponibles:
-            esc_sobol, nota = escenario, ""
-        else:
-            esc_sobol = "base" if "base" in disponibles else disponibles[0]
-            nota = f" · escenario '{escenario}' no pre-calculado, se muestra '{esc_sobol}'"
-
-        sub = sobol[sobol["escenario"] == esc_sobol].sort_values("ST")
 
         st.caption(
-            "Índices de Sobol **totales (ST)** del VAN medio, pre-calculados con "
-            "`src/sensibilidad.py` con el AR(1) en niveles (no se recalculan en "
-            "vivo). Barras de error = IC bootstrap (`ST_conf`). La superficie "
-            "está fija en 120 ha: es una decisión de inversión, no una "
-            "incertidumbre. Si se barre (60–180 ha), con VAN por ha negativo "
-            "solo reescala la pérdida y se lleva varianza por efecto escala."
+            "Índices de Sobol **totales (ST)** pre-calculados con el precio "
+            "bayesiano (`src/sensibilidad.py`, `analizar_sobol_bayes`; no se "
+            "recalculan en vivo), sobre dos métricas de las mismas 2.304 "
+            "evaluaciones (N = 256, 1.000 simulaciones cada una): el **VAN "
+            "medio** y el **CVaR 10%** (promedio del VAN en el 10% peor de las "
+            "simulaciones, una medida del riesgo de cola). Una sola corrida: el "
+            "escenario solo fija el peso w de la paridad, así que w se barre "
+            "en [0, 1]. Barras de error = IC bootstrap (`ST_conf`). La "
+            "superficie está fija en 120 ha: es una decisión de inversión, no "
+            "una incertidumbre."
         )
-        if modo_precio != "ar1":
-            st.info(
-                "El sidebar tiene otro 'Modelo de precio', pero estos índices "
-                "se pre-calcularon con el AR(1) en niveles -- no recalculan en "
-                "vivo, así que no reflejan el modelo seleccionado."
-            )
         st.info(
-            "Estos índices se pre-calcularon con el caso base ANTERIOR (venta "
-            "en verde, 4 USD/kg verde; 120 ha, traslado de quebrantos, sin "
-            "activación del OPEX pre-productivo, sin estrés climático): no "
-            "reflejan el caso base actual (venta en seco) ni los cambios del "
-            "sidebar. Se regeneran una sola vez para el caso seco, con el "
-            "precio bayesiano y el tipo de cambio real (ver notas/PLAN_TESIS.md, "
-            "Paso 7)."
+            "**Clima y vecería dan ≈ 0** porque Sobol varía sus PARÁMETROS "
+            "(precisión de los factores de frío y calor, persistencia de la "
+            "vecería), no el clima año a año. El clima y la vecería de cada año "
+            "sí están dentro de cada simulación, y su efecto se promedia en las "
+            "1.000 simulaciones de cada evaluación: su peso en la dispersión "
+            "del VAN se ve en la descomposición de varianza (clima ~5%, "
+            "vecería ~3% en el caso base), no en estos índices."
         )
-        etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
-        fig, ax = plt.subplots(figsize=(8, 3.8))
-        ax.barh(
-            etiquetas, sub["ST"],
-            xerr=sub["ST_conf"].to_numpy(), color="#4C72B0",
-            error_kw=dict(ecolor="#555555", lw=1),
-        )
-        ax.set_xlabel("Índice de Sobol total (ST)")
-        ax.set_title(f"Sensibilidad del VAN medio — escenario {esc_sobol}{nota}")
-        _mostrar(fig)
+        if modo_precio != "bayesiano":
+            st.info(
+                "Estos índices se calcularon con el precio bayesiano: no "
+                "reflejan el 'Modelo de precio' elegido en el sidebar ni sus "
+                "otras opciones (caso base: venta en seco, quebrantos sí, "
+                "activación no, sin estrés climático)."
+            )
 
+        columnas = st.columns(2)
+        tablas = []
+        for columna, (metrica, nombre) in zip(columnas, _NOMBRE_METRICA.items()):
+            sub = sobol[sobol["metrica"] == metrica].sort_values("ST")
+            etiquetas = sub["parametro"].map(lambda p: _NOMBRE_PARAMETRO.get(p, p))
+            fig, ax = plt.subplots(figsize=(6, 3.8))
+            ax.barh(
+                etiquetas, sub["ST"],
+                xerr=sub["ST_conf"].to_numpy(), color="#4C72B0",
+                error_kw=dict(ecolor="#555555", lw=1),
+            )
+            ax.set_xlabel("Índice de Sobol total (ST)")
+            ax.set_title(f"Sensibilidad del {nombre}")
+            _mostrar(fig, columna)
+            tablas.append(
+                sub.assign(parametro=etiquetas)
+                .set_index("parametro")[["S1", "ST", "ST_conf"]]
+                .rename(columns={
+                    "S1": f"S1 {nombre}", "ST": f"ST {nombre}", "ST_conf": f"IC ST {nombre} (±)",
+                })
+            )
         tabla_sobol = (
-            sub.assign(parametro=etiquetas)
-            .sort_values("ST", ascending=False)[["parametro", "S1", "S1_conf", "ST", "ST_conf"]]
-            .rename(columns={
-                "parametro": "Parámetro",
-                "S1": "Primer orden (S1)",
-                "S1_conf": "IC S1 (±)",
-                "ST": "Total (ST)",
-                "ST_conf": "IC ST (±)",
-            })
+            pd.concat(tablas, axis=1)
+            .sort_values(f"ST {_NOMBRE_METRICA['van_neto_medio_usd']}", ascending=False)
+            .reset_index()
+            .rename(columns={"parametro": "Parámetro"})
         )
         st.dataframe(
             tabla_sobol.style.format(lambda v: _num(v, 3), subset=tabla_sobol.columns[1:]),
