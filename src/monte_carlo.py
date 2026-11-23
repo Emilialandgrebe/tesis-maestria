@@ -466,7 +466,8 @@ class ParametrosMC:
     # ningún caller. "bayesiano" (Paso 7, src/precio_bayesiano.py): AR(1) en
     # niveles con (phi, sigma) sorteados de la posterior de FRED y nivel mu
     # de la mezcla exportación/importación; el escenario fija el peso w.
-    # Solo para venta en seco.
+    # Medias de las paridades según la base de venta (en verde 2,5 / 5,5;
+    # en seco 5 / 9).
     modo_precio: Literal["ar1", "triangular", "bayesiano"] = "ar1"
 
     # Tipo de cambio real estocástico (Paso 7): un sorteo por simulación,
@@ -674,7 +675,9 @@ def _fijar_precio(
         return prices
     if isinstance(precio_params, ParametrosPrecioBayes):
         # Precio fijo = nivel esperado E[mu] en los años con venta.
-        trayectoria = precio_params.nivel_esperado() * mascara_venta(params.n_años)
+        trayectoria = precio_params.nivel_esperado() * mascara_venta(
+            params.n_años, precio_params.es_verde()
+        )
     elif precio_params is not None and params.modo_precio == "ar1":
         trayectoria = precio_params.trayectoria_base(params.n_años)
     elif trayectoria_excel is not None:
@@ -969,19 +972,17 @@ def _resolver_precio_params(
     `venta_verde=None` -> se completa; distinta de la de `costos` -> error
     (ingresos con una base y precios con la otra).
     Con `modo_precio="bayesiano"` devuelve un `ParametrosPrecioBayes` (el
-    del escenario si `precio_params` es None) y exige venta en seco.
+    del escenario si `precio_params` es None), con la misma regla para
+    `venta_verde` (fija las medias de las paridades).
     """
     if params.modo_precio == "bayesiano":
-        if costos.venta_verde:
-            raise ValueError("modo_precio='bayesiano' solo está definido para venta en seco")
         if precio_params is None:
-            return ParametrosPrecioBayes(escenario=params.escenario, venta_verde=False)
+            return ParametrosPrecioBayes(escenario=params.escenario, venta_verde=costos.venta_verde)
         if not isinstance(precio_params, ParametrosPrecioBayes):
             raise TypeError("modo_precio='bayesiano' requiere ParametrosPrecioBayes")
-        return precio_params
-    if isinstance(precio_params, ParametrosPrecioBayes):
+    elif isinstance(precio_params, ParametrosPrecioBayes):
         raise TypeError("ParametrosPrecioBayes requiere modo_precio='bayesiano'")
-    if precio_params is None:
+    elif precio_params is None:
         return ParametrosPrecioAR1(escenario=params.escenario, venta_verde=costos.venta_verde)
     if precio_params.venta_verde is None:
         return replace(precio_params, venta_verde=costos.venta_verde)
@@ -1070,11 +1071,11 @@ def simulate_revenue(
 
         kg/ha × superficie × factor kg vendidos × precio de referencia × factor precio recibido
 
-    Caso base (`costos.venta_verde=False`): `yields_kg_ha` en kg secos con
-    cáscara, `prices_usd_kg` el precio al productor del seco y los factores
-    del bloque 8 (conversión 1,00, proporción apagada) valen 1. Con
-    `costos.venta_verde` (alternativa) los factores valen 1, el rendimiento
-    se lee como kg verdes y `prices_usd_kg` es el precio en verde.
+    Caso base (`costos.venta_verde=True`): los factores valen 1, el
+    rendimiento se lee como kg verdes y `prices_usd_kg` es el precio en
+    verde. Alternativa en seco (`venta_verde=False`): `yields_kg_ha` en kg
+    secos con cáscara, `prices_usd_kg` el precio al productor del seco y los
+    factores del bloque 8 (conversión 1,00, proporción apagada) valen 1.
 
     Retorna
     -------
@@ -1300,7 +1301,7 @@ def _orquestar_resultado(
     """
     n, T = yields.shape
 
-    # Rendimiento en kg/ha (secos con cáscara en el caso base); ingresos y
+    # Rendimiento en kg/ha (verdes en el caso base); ingresos y
     # maquila sobre kg vendidos (secos con el bloque 8, verdes en venta en verde).
     produccion_kg_vendidos = costos.kg_vendidos(yields * params.hectareas)
     revenue = simulate_revenue(yields, prices, params.hectareas, costos)
@@ -1322,9 +1323,9 @@ def _orquestar_resultado(
     return pd.DataFrame({
         "simulacion":       np.repeat(np.arange(n), T),
         "año":              np.tile(años, n),
-        "rendimiento_kg_ha": yields.ravel(),  # kg/ha (secos con cáscara en el caso base)
+        "rendimiento_kg_ha": yields.ravel(),  # kg/ha (verdes en el caso base)
         "produccion_kg_vendidos": produccion_kg_vendidos.ravel(),
-        "precio_usd_kg":    prices.ravel(),  # precio de referencia (seco al productor o verde)
+        "precio_usd_kg":    prices.ravel(),  # precio de referencia (verde o seco al productor)
         "ingreso_usd":      revenue.ravel(),
         "opex_usd":         opex.ravel(),
         "ebitda_usd":       flujo["ebitda"].ravel(),
@@ -1539,8 +1540,8 @@ def _tir_vectorizada(
 def precio_equilibrio(df: pd.DataFrame, año: int = 12) -> pd.Series:
     """
     Precio de equilibrio del `año` por simulación, en USD por kg VENDIDO
-    recibido por la finca (kg seco con cáscara en el caso base, kg verde
-    en venta en verde): OPEX del año / kg vendidos del año (Flujo!B11 del Excel, año
+    recibido por la finca (kg verde en el caso base, kg seco con cáscara
+    en la alternativa en seco): OPEX del año / kg vendidos del año (Flujo!B11 del Excel, año
     12 = plena producción). Es el precio recibido que cubre el OPEX (con
     IIBB incluido al precio actual). NaN si ese año no hay producción.
     """

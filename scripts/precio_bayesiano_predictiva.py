@@ -3,12 +3,14 @@
 1. Predictiva previa (solo precio, 20.000 sendas antitéticas): P5 / P50 / P95
    del precio en los años 7, 12 y 20 y la dispersión P95/P5 del año 20, para
    el precio bayesiano con w = 1 / 0,5 / 0 y, como comparación, el AR(1)
-   actual en niveles y sobre retornos (escenario base, 7 USD/kg seco).
+   actual en niveles y sobre retornos (escenario base). Caso base desde
+   2026-11-20: venta en verde (paridades 2,5 / 5,5, AR(1) base 4 USD/kg
+   verde).
    Referencia histórica: P95/P5 y máx/mín del nivel real de FRED 1991-2026.
    Salida: outputs/precio_bayesiano_predictiva.csv
 
 2. Sensibilidad a w (Monte Carlo completo, `run_monte_carlo_antitetico`,
-   10.000 simulaciones, caso base seco, modo bayesiano) con w = 0; 0,25;
+   10.000 simulaciones, caso base en verde, modo bayesiano) con w = 0; 0,25;
    0,5; 0,75; 1. Salida: outputs/precio_bayesiano_sensibilidad_w.csv
 
 Uso:
@@ -67,8 +69,8 @@ def predictiva() -> pd.DataFrame:
         )
         filas.append(_resumen_precios(f"bayesiano w={w:g} ({etiqueta})", precios))
     for nombre, pp in (
-        ("AR(1) niveles, base 7", ParametrosPrecioAR1(escenario="base", venta_verde=False)),
-        ("AR(1) retornos (estrés), base 7", precio_retornos_estres("base", venta_verde=False)),
+        ("AR(1) niveles, base", ParametrosPrecioAR1(escenario="base")),
+        ("AR(1) retornos (estrés), base", precio_retornos_estres("base")),
     ):
         precios = simulate_prices_ar1_antitetico(N_PRECIO, N_AÑOS, pp, np.random.default_rng(SEMILLA))
         filas.append(_resumen_precios(nombre, precios))
@@ -103,7 +105,9 @@ def sensibilidad_w(n: int) -> pd.DataFrame:
         n_peores = max(1, int(np.ceil(0.10 * n)))
         filas.append({
             "peso_exportacion_w": w,
-            "nivel_esperado_usd_kg": 5 * w + 9 * (1 - w),
+            "nivel_esperado_usd_kg": ParametrosPrecioBayes(
+                peso_exportacion=w, venta_verde=costos.venta_verde
+            ).nivel_esperado(),
             "van_medio": van.mean(),
             "van_mediano": float(np.median(van)),
             "van_p5": float(np.percentile(van, 5)),

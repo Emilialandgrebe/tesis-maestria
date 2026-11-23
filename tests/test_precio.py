@@ -95,13 +95,13 @@ def test_mediana_queda_debajo_de_la_trayectoria(especificacion):
 
 @pytest.mark.parametrize(
     "venta_verde, niveles",
-    [(False, (5.0, 7.0, 9.0)), (True, (2.5, 4.0, 6.0))],
+    [(False, (5.0, 7.0, 9.0)), (True, (2.5, 4.0, 5.5))],
     ids=["seco_al_productor", "en_verde"],
 )
 def test_trayectoria_plana_y_media_igual_al_nivel(venta_verde, niveles):
-    """Precios reales planos en los años 7-20: seco con cáscara al
-    productor (bloque 6, caso base) 5 / 7 / 9 USD/kg seco; en verde
-    (bloque 9, alternativa) 2,5 / 4 / 6 USD/kg verde. El AR(1) en niveles
+    """Precios reales planos en los años 7-20: en verde (bloque 9, caso
+    base) 2,5 / 4 / 5,5 USD/kg verde; seco con cáscara al productor
+    (bloque 6, alternativa) 5 / 7 / 9 USD/kg seco. El AR(1) en niveles
     revierte a ese nivel y, con la corrección de convexidad, E[precio] =
     nivel en cada año."""
     modelo = cargar_modelo_v2()
@@ -116,13 +116,13 @@ def test_trayectoria_plana_y_media_igual_al_nivel(venta_verde, niveles):
 
 
 def test_default_sigue_caso_base_del_excel():
-    """Sin indicar la base, la trayectoria es la del seco al productor
-    (Supuestos!B78 = 0, caso base desde 2026-11-19)."""
+    """Sin indicar la base, la trayectoria es la del precio en verde
+    (Supuestos!B78 = 1, caso base desde 2026-11-20)."""
     modelo = cargar_modelo_v2()
-    assert modelo.venta_verde is False
+    assert modelo.venta_verde is True
     np.testing.assert_array_equal(
         modelo.trayectoria_precio("base", N_AÑOS),
-        modelo.trayectoria_precio("base", N_AÑOS, venta_verde=False),
+        modelo.trayectoria_precio("base", N_AÑOS, venta_verde=True),
     )
 
 

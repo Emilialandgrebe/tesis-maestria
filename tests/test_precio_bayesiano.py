@@ -15,6 +15,7 @@ if str(RAIZ) not in sys.path:
 from src.costos import ParametrosCostos  # noqa: E402
 from src.monte_carlo import ParametrosMC, run_monte_carlo, run_monte_carlo_antitetico  # noqa: E402
 from src.precio_bayesiano import (  # noqa: E402
+    MEDIAS_PARIDAD,
     PESO_POR_ESCENARIO,
     RUTA_POSTERIOR,
     ParametrosPrecioBayes,
@@ -42,14 +43,18 @@ def test_posterior_en_soporte_de_la_prior():
 
 
 def test_pesos_y_niveles_de_los_escenarios():
-    """Pesimista w = 1, base 0,5, optimista 0; E[mu] = 5 / 7 / 9 (Excel)."""
+    """Pesimista w = 1, base 0,5, optimista 0. En verde (caso base) E[mu] =
+    2,5 / 4 / 5,5 USD/kg verde (bloque 9); en seco 5 / 7 / 9 (bloque 6)."""
     assert PESO_POR_ESCENARIO == {"pesimista": 1.0, "base": 0.5, "optimista": 0.0}
-    for escenario, nivel in (("pesimista", 5.0), ("base", 7.0), ("optimista", 9.0)):
-        assert ParametrosPrecioBayes(escenario=escenario).nivel_esperado() == pytest.approx(nivel)
-    assert ParametrosPrecioBayes(peso_exportacion=0.25).nivel_esperado() == pytest.approx(8.0)
+    assert MEDIAS_PARIDAD == {True: (2.5, 5.5), False: (5.0, 9.0)}
+    for escenario, verde, seco in (("pesimista", 2.5, 5.0), ("base", 4.0, 7.0), ("optimista", 5.5, 9.0)):
+        assert ParametrosPrecioBayes(escenario=escenario).nivel_esperado() == pytest.approx(verde)
+        assert ParametrosPrecioBayes(escenario=escenario, venta_verde=False).nivel_esperado() == pytest.approx(seco)
+    assert ParametrosPrecioBayes(peso_exportacion=0.25).nivel_esperado() == pytest.approx(4.75)
+    assert ParametrosPrecioBayes(peso_exportacion=0.25, venta_verde=False).nivel_esperado() == pytest.approx(8.0)
 
 
-@pytest.mark.parametrize("escenario, nivel", [("pesimista", 5.0), ("base", 7.0), ("optimista", 9.0)])
+@pytest.mark.parametrize("escenario, nivel", [("pesimista", 2.5), ("base", 4.0), ("optimista", 5.5)])
 def test_media_del_precio_igual_al_nivel(escenario, nivel):
     """Lognormales centradas en la media y corrección de convexidad por
     simulación: E[precio_t] = E[mu] en todos los años con venta."""
@@ -66,8 +71,8 @@ def test_mezcla_bimodal_con_peso():
         devolver_parametros=True,
     )
     assert par["exportacion"].mean() == pytest.approx(0.3, abs=0.01)
-    assert par.loc[par["exportacion"], "mu"].mean() == pytest.approx(5.0, rel=0.01)
-    assert par.loc[~par["exportacion"], "mu"].mean() == pytest.approx(9.0, rel=0.01)
+    assert par.loc[par["exportacion"], "mu"].mean() == pytest.approx(2.5, rel=0.01)
+    assert par.loc[~par["exportacion"], "mu"].mean() == pytest.approx(5.5, rel=0.01)
     assert np.log(par.loc[par["exportacion"], "mu"]).std() == pytest.approx(0.10, rel=0.03)
 
 
@@ -106,16 +111,21 @@ def test_mascara_venta_años_7_a_20():
 
 @pytest.mark.parametrize("runner", [run_monte_carlo, run_monte_carlo_antitetico], ids=lambda f: f.__name__)
 def test_motor_modo_bayesiano(runner):
-    df = runner(ParametrosMC(n_simulaciones=2_000, modo_precio="bayesiano"), ParametrosCostos())
-    precio12 = df.loc[df["año"] == 12, "precio_usd_kg"]
-    assert precio12.mean() == pytest.approx(7.0, rel=0.03)
+    """Caso base en verde (E = 4 USD/kg verde) y alternativa en seco (7)."""
+    params = ParametrosMC(n_simulaciones=2_000, modo_precio="bayesiano")
+    for costos, nivel in ((ParametrosCostos(), 4.0), (ParametrosCostos(venta_verde=False), 7.0)):
+        df = runner(params, costos)
+        precio12 = df.loc[df["año"] == 12, "precio_usd_kg"]
+        assert precio12.mean() == pytest.approx(nivel, rel=0.03)
 
 
-def test_modo_bayesiano_rechaza_venta_verde():
+def test_modo_bayesiano_base_incoherente_falla():
+    """Paridades de una base de venta e ingresos de la otra: error."""
     with pytest.raises(ValueError):
         run_monte_carlo(
             ParametrosMC(n_simulaciones=10, modo_precio="bayesiano"),
             ParametrosCostos(venta_verde=True),
+            ParametrosPrecioBayes(venta_verde=False),
         )
     with pytest.raises(ValueError):
         ParametrosPrecioBayes(peso_exportacion=1.5)
@@ -127,7 +137,7 @@ def test_precio_fijo_usa_el_nivel_esperado():
                      fuentes_fijas=frozenset({"precio"})),
         ParametrosCostos(),
     )
-    np.testing.assert_allclose(df.loc[df["año"] >= 7, "precio_usd_kg"], 9.0)
+    np.testing.assert_allclose(df.loc[df["año"] >= 7, "precio_usd_kg"], 5.5)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +147,8 @@ def test_precio_fijo_usa_el_nivel_esperado():
 def test_factor_ars_solo_toca_costos_en_pesos():
     from src.monte_carlo import resumen_financiero
 
-    base, shock = ParametrosCostos(), ParametrosCostos(factor_ars=1.2)
+    # Alternativa en seco: tiene maquila (en pesos), que en verde vale 0.
+    base, shock = ParametrosCostos(venta_verde=False), ParametrosCostos(venta_verde=False, factor_ars=1.2)
     items = base.capex_items
     ars = items["moneda_pago"] == "ARS"
     esperado = (items.loc[ars, "total_escalado_usd"].sum() * 1.2
@@ -147,7 +158,7 @@ def test_factor_ars_solo_toca_costos_en_pesos():
     assert shock.costo_por_kg == pytest.approx(1.2 * base.costo_por_kg)  # maquila en ARS
     assert shock.alicuota_iibb == base.alicuota_iibb
     assert shock.valor_residual == base.valor_residual
-    # Con factor 1 el caso base no cambia (VAN de control del Excel).
+    # Con factor 1 no cambia (VAN de control del Excel, alternativa en seco).
     p = ParametrosMC(n_simulaciones=1, deterministico=True)
     van = resumen_financiero(run_monte_carlo(p, base), base)["van_neto_usd"].iloc[0]
     assert van == pytest.approx(-1_487_137.36, rel=1e-6)

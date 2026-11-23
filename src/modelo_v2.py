@@ -10,11 +10,12 @@ escenario, rampa de fertilización).
 Hay dos juegos de precios por escenario, planos en los años 7-20, en USD
 constantes 2026:
 
-- SECO con cáscara al productor (bloque 6; caso base desde 2026-11-19,
-  venta_verde = 0): 5 / 7 / 9 USD/kg seco, junto con el bloque 8
-  (conversión 1,00 y proporción al productor apagada, `src/costos.py`);
-- en VERDE (bloque 9; alternativa, venta_verde = 1): lo que paga la
-  procesadora por kg verde recién cosechado, 2,5 / 4 / 6 USD/kg verde.
+- en VERDE (bloque 9; caso base desde 2026-11-20, venta_verde = 1): lo que
+  paga la procesadora por kg verde recién cosechado, con pelón, 2,5 / 4 /
+  5,5 USD/kg verde;
+- SECO con cáscara al productor (bloque 6; alternativa, venta_verde = 0):
+  5 / 7 / 9 USD/kg seco, junto con el bloque 8 (conversión 1,00 y
+  proporción al productor apagada, `src/costos.py`).
 
 Todas las series anuales se devuelven indexadas por año del proyecto 1..20
 (el año 0 del Excel solo tiene CAPEX, que el motor maneja aparte).
@@ -77,8 +78,8 @@ class ModeloV2:
 
     @property
     def venta_verde(self) -> bool:
-        """Supuestos!B78: True = venta en verde (alternativa); False = venta
-        en seco con cáscara (caso base desde 2026-11-19)."""
+        """Supuestos!B78: True = venta en verde a la procesadora (caso base
+        desde 2026-11-20); False = venta en seco con cáscara (alternativa)."""
         return bool(self.supuestos["venta_verde"])
 
     def trayectoria_precio(
@@ -87,8 +88,8 @@ class ModeloV2:
         """Precio de referencia por año (USD constantes 2026).
 
         `venta_verde=True`: precio en verde, USD/kg verde (bloque 9).
-        `venta_verde=False`: precio de mercado del procesado, USD/kg seco
-        (bloque 6). None (default) sigue el caso base del Excel (B78).
+        `venta_verde=False`: precio del seco con cáscara al productor,
+        USD/kg seco (bloque 6). None (default) sigue el caso base del Excel (B78).
         `escenario`: "pesimista", "base", "optimista" o, solo con precio de
         mercado, "plan_original" (trayectoria vieja, solo referencia).
         """

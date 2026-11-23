@@ -4,20 +4,21 @@ La corrida determinística del motor (`ParametrosMC(deterministico=True)`:
 curva y precios del Excel, sin clima, vecería simulada ni ruido de OPEX) a
 120 ha tiene que reproducir el VAN y la TIR real de la hoja Flujo del Excel.
 
-Caso base del Excel (como está guardado, desde 2026-11-19): la finca vende
-SECO con cáscara (Supuestos B78 = 0). El rendimiento (3.000 kg/ha) ya está
-en kg secos (conversión B71 = 1,00), los precios del bloque 6 ya son al
-productor (B72 = 0, proporción apagada; planos 5 / 7 / 9 USD/kg seco en los
-años 7-20) y la finca paga la maquila de pelado y secado (0,40 USD/kg
-seco). Quebrantos sí, activación no. VAN base -1.487.137,36, pesimista
--2.512.883,25 y optimista -468.952,76 (tolerancia relativa 1e-6). La
-referencia del base sale de `data/modelo_v2/referencia_indicadores.csv` y
-`referencia_flujo.csv` (exportados por `scripts/importar_modelo_v2.py`).
+Caso base del Excel (como está guardado, desde 2026-11-20, confirmado con
+el asesor): la finca vende el pistacho RECIÉN COSECHADO, con pelón, a la
+procesadora (Supuestos B78 = 1, bloque 9): ingreso = kg verdes (3.000
+kg/ha a plena producción) x precio en verde (planos 2,5 / 4 / 5,5 USD/kg
+verde en los años 7-20), sin conversión ni maquila. Quebrantos sí,
+activación no. VAN base -2.836.458,08, pesimista -3.713.633,54 y optimista
+-2.045.189,20 (tolerancia relativa 1e-6). La referencia del base sale de
+`data/modelo_v2/referencia_indicadores.csv` y `referencia_flujo.csv`
+(exportados por `scripts/importar_modelo_v2.py`).
 
-Alternativa: venta en verde a la procesadora (B78 = 1): ingreso = kg
-verdes x precio en verde (planos 2,5 / 4 / 6 USD/kg verde), sin conversión
-ni maquila. VAN base -2.836.458,08, pesimista -3.713.633,54 y optimista
--1.788.373,93.
+Alternativa: venta en SECO con cáscara (B78 = 0, bloques 6 y 8): los
+3.000 kg/ha leídos como secos (conversión B71 = 1,00), precios al
+productor 5 / 7 / 9 USD/kg seco (B72 = 0) y maquila de pelado y secado
+(0,40 USD/kg seco). VAN base -1.487.137,36, pesimista -2.512.883,25 y
+optimista -468.952,76.
 
 Plan original: venta_verde = 0, los dos interruptores del bloque 8
 apagados y la
@@ -65,7 +66,7 @@ TOLERANCIA_RELATIVA = 0.01
 
 _RUNNERS = [run_monte_carlo, run_monte_carlo_antitetico, run_monte_carlo_precio_historico]
 
-# Caso base del Excel: venta en seco con cáscara (Flujo!B5 con
+# Alternativa: venta en seco con cáscara (B78 = 0; Flujo!B5 con
 # Supuestos!B22 = 1/2/3). Si cambian los precios del bloque 6, la
 # conversión (B71) o la maquila, hay que volver a tomarlos.
 VAN_VENTA_SECO_USD = {
@@ -73,12 +74,12 @@ VAN_VENTA_SECO_USD = {
     "base": -1_487_137.36,
     "optimista": -468_952.76,
 }
-# Alternativa: venta en verde (B78 = 1). Si cambian los precios en verde
-# (bloque 9), hay que volver a tomarlos.
+# Caso base: venta en verde a la procesadora (B78 = 1). Si cambian los
+# precios en verde (bloque 9), hay que volver a tomarlos.
 VAN_VENTA_VERDE_USD = {
     "pesimista": -3_713_633.54,
     "base": -2_836_458.08,
-    "optimista": -1_788_373.93,
+    "optimista": -2_045_189.20,
 }
 TOLERANCIA_ESTRICTA_RELATIVA = 1e-6
 
@@ -138,13 +139,13 @@ def _corrida_deterministica(
     quebrantos: bool = True,
     activar_opex_pre: bool = False,
     plan_original: bool = False,
-    venta_verde: bool = False,
+    venta_verde: bool = True,
     escenario: str = "base",
 ):
-    """Default: caso base del Excel (venta en seco con cáscara, bloque 8
-    tal como está guardado). `venta_verde=True`: alternativa en verde
-    (bloque 9). `plan_original=True`: venta_verde = 0, bloque 8 apagado y
-    trayectoria de precio vieja."""
+    """Default: caso base del Excel (venta en verde a la procesadora, bloque
+    9). `venta_verde=False`: alternativa en seco con cáscara (bloque 8 tal
+    como está guardado). `plan_original=True`: venta_verde = 0, bloque 8
+    apagado y trayectoria de precio vieja."""
     if plan_original:
         venta_verde, escenario = False, "plan_original"
     params = ParametrosMC(
@@ -184,21 +185,23 @@ def test_interruptores_fiscales_coinciden_con_excel():
 
 
 def test_base_de_ingresos_coincide_con_excel():
-    """Caso base seco: el Excel está guardado con venta en seco (B78 = 0),
-    conversión 1,00 (B71) y precio al productor apagado (B72 = 0), y los
-    defaults del motor son los del Excel."""
+    """Caso base en verde: el Excel está guardado con venta en verde (B78 =
+    1); el bloque 8 de la alternativa en seco queda con conversión 1,00
+    (B71) y precio al productor apagado (B72 = 0). Los defaults del motor
+    son los del Excel: sin conversión ni maquila."""
     supuestos = cargar_modelo_v2().supuestos
-    assert supuestos["venta_verde"] == 0
+    assert supuestos["venta_verde"] == 1
     assert supuestos["factor_conversion_seco"] == 1.0
     assert supuestos["precio_al_productor"] == 0
     defaults = ParametrosCostos()
-    assert defaults.venta_verde is False
+    assert defaults.venta_verde is True
     assert defaults.precio_al_productor is False
     assert defaults.factor_conversion_seco == supuestos["factor_conversion_seco"]
     assert defaults.proporcion_precio_productor == supuestos["proporcion_precio_productor"]
     assert defaults.factor_kg_vendidos == 1.0
     assert defaults.factor_precio_recibido == 1.0
-    assert defaults.costo_por_kg == pytest.approx(0.4)
+    assert defaults.costo_por_kg == 0.0
+    assert ParametrosCostos(venta_verde=False).costo_por_kg == pytest.approx(0.4)
 
 
 def test_interruptores_apagados_reproducen_plan_original():
@@ -229,16 +232,16 @@ def test_venta_verde_sin_conversion_ni_maquila():
 def test_caso_base_fijado_coincide_con_csv(referencia):
     """La referencia fijada del caso base es la que guarda el .xlsx."""
     assert referencia["van_usd"] == pytest.approx(
-        VAN_VENTA_SECO_USD["base"], rel=TOLERANCIA_ESTRICTA_RELATIVA
+        VAN_VENTA_VERDE_USD["base"], rel=TOLERANCIA_ESTRICTA_RELATIVA
     )
 
 
 @pytest.mark.parametrize("escenario", list(VAN_VENTA_SECO_USD))
 @pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
 def test_van_venta_seco_coincide_con_excel(runner, escenario):
-    """Caso base (venta en seco con cáscara) en los tres escenarios: VAN
+    """Alternativa (venta en seco con cáscara) en los tres escenarios: VAN
     del Excel con tolerancia relativa 1e-6."""
-    _, resumen, _ = _corrida_deterministica(runner, escenario=escenario)
+    _, resumen, _ = _corrida_deterministica(runner, escenario=escenario, venta_verde=False)
     for van in resumen["van_neto_usd"]:
         assert van == pytest.approx(
             VAN_VENTA_SECO_USD[escenario], rel=TOLERANCIA_ESTRICTA_RELATIVA
@@ -248,9 +251,9 @@ def test_van_venta_seco_coincide_con_excel(runner, escenario):
 @pytest.mark.parametrize("escenario", list(VAN_VENTA_VERDE_USD))
 @pytest.mark.parametrize("runner", _RUNNERS, ids=lambda f: f.__name__)
 def test_van_venta_verde_coincide_con_excel(runner, escenario):
-    """Alternativa (venta en verde) en los tres escenarios: VAN del Excel
-    con tolerancia relativa 1e-6."""
-    _, resumen, _ = _corrida_deterministica(runner, escenario=escenario, venta_verde=True)
+    """Caso base (venta en verde) en los tres escenarios: VAN del Excel con
+    tolerancia relativa 1e-6."""
+    _, resumen, _ = _corrida_deterministica(runner, escenario=escenario)
     for van in resumen["van_neto_usd"]:
         assert van == pytest.approx(
             VAN_VENTA_VERDE_USD[escenario], rel=TOLERANCIA_ESTRICTA_RELATIVA
@@ -277,7 +280,7 @@ def test_plan_original_caso_base_fiscal_estricto(runner):
 
 def test_precio_equilibrio_coincide_con_excel(referencia):
     """Flujo!B11: OPEX del año 12 / kg vendidos del año 12 (kg secos con
-    cáscara en el caso base), en USD por kg vendido."""
+    con pelón en el caso base), en USD por kg vendido."""
     df, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
     assert precio_equilibrio(df, 12).iloc[0] == pytest.approx(
         referencia["precio_equilibrio_anio12_usd_kg_vendido"], rel=TOLERANCIA_ESTRICTA_RELATIVA
@@ -285,18 +288,18 @@ def test_precio_equilibrio_coincide_con_excel(referencia):
 
 
 def test_kilos_y_precio_coinciden_con_produccion_excel():
-    """Año 12 del Excel (hoja Producción, 324.000 kg). Caso base seco: se
-    venden los 324.000 kg secos con cáscara a 7 USD/kg al productor,
-    ingresos 2.268.000. Alternativa en verde: los mismos 324.000 kg leídos
-    como verdes, a 4 USD/kg verde, ingresos 1.296.000."""
-    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    """Año 12 del Excel (hoja Producción, 324.000 kg). Caso base en verde:
+    se venden los 324.000 kg verdes a 4 USD/kg verde, ingresos 1.296.000.
+    Alternativa en seco: los mismos 324.000 kg leídos como secos con
+    cáscara, a 7 USD/kg al productor, ingresos 2.268.000."""
+    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=False)
     año12 = seco.set_index("año").loc[12]
     assert año12["rendimiento_kg_ha"] * 120 == pytest.approx(324_000)
     assert año12["produccion_kg_vendidos"] == pytest.approx(324_000)
     assert año12["precio_usd_kg"] == pytest.approx(7.0)
     assert año12["ingreso_usd"] == pytest.approx(2_268_000)
 
-    verde, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=True)
+    verde, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
     año12 = verde.set_index("año").loc[12]
     assert año12["produccion_kg_vendidos"] == pytest.approx(324_000)
     assert año12["precio_usd_kg"] == pytest.approx(4.0)
@@ -307,8 +310,8 @@ def test_maquila_cero_en_venta_verde():
     """OPEX!49 x IF(venta_verde=1, 0, 1): el OPEX con venta en verde es el
     de venta en seco menos la maquila (0,40 x kg secos) y menos el IIBB
     sobre la diferencia de ventas."""
-    verde, _, costos = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=True)
-    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    verde, _, costos = _corrida_deterministica(run_monte_carlo, n_simulaciones=1)
+    seco, _, _ = _corrida_deterministica(run_monte_carlo, n_simulaciones=1, venta_verde=False)
     verde, seco = verde.set_index("año"), seco.set_index("año")
     esperado = (
         seco["opex_usd"]

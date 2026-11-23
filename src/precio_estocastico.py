@@ -5,9 +5,10 @@ por escenario -- `data/modelo_v2/anual.csv`) multiplicada por un DESVÍO
 logarítmico estocástico. La trayectoria es PLANA en los años 7-20, porque
 la serie histórica deflactada no muestra suba real:
 
-- caso base (venta en seco con cáscara, bloque 6): precio al productor de
-  5 / 7 / 9 USD/kg seco (pesimista / base / optimista);
-- alternativa (venta en verde, bloque 9): 2,5 / 4 / 6 USD/kg verde.
+- caso base (venta en verde a la procesadora, bloque 9): 2,5 / 4 / 5,5
+  USD/kg verde (pesimista / base / optimista);
+- alternativa (venta en seco con cáscara, bloque 6): precio al productor
+  de 5 / 7 / 9 USD/kg seco.
 
 La trayectoria creciente del plan original (8 -> 11,5) queda solo como
 referencia (escenario "plan_original" de `src/modelo_v2.py`). El AR(1) es
@@ -24,7 +25,7 @@ con el mismo sigma_eps:
 - "niveles" (PRINCIPAL desde 2026-11-04): AR(1) del desvío log respecto de
   la trayectoria, d_t = phi * d_(t-1) + sigma_eps * Z_t + c (acumulado como
   c * t), d_0 = 0, phi = PHI_NIVELES. Revierte a la trayectoria, que
-  ahora es un nivel plano (7 USD/kg seco en el caso base), con semivida
+  ahora es un nivel plano (4 USD/kg verde en el caso base), con semivida
   ~4 años; la
   varianza converge a sigma^2 / (1 - phi^2).
 - "retornos" (escenario de ESTRÉS): AR(1) sobre los retornos log,
@@ -95,15 +96,15 @@ class ParametrosPrecioAR1:
     # de la especificación: ver `precio_retornos_estres()`.
     especificacion: Literal["retornos", "niveles"] = "niveles"
     # Multiplicador de TODA la trayectoria base: incertidumbre sobre el
-    # nivel del precio (Sobol lo barre en 0,625-1,5: 4,4-10,5 USD/kg seco
-    # sobre el base de 7; el dataset ML sigue en 0,8-1,2).
+    # nivel del precio (el Sobol AR(1) lo barre en 0,625-1,5: 2,5-6 USD/kg
+    # verde sobre el base de 4; el dataset ML sigue en 0,8-1,2).
     nivel_mult: float = 1.0
     # Trayectoria base propia (USD/kg por año 1..n), en lugar de la del Excel
     # del `escenario`. None (default) usa la del Excel. Solo para análisis
     # de sensibilidad (p. ej. precio real constante).
     trayectoria: tuple[float, ...] | None = None
     # Qué precio de referencia usa la trayectoria del Excel: en verde (True)
-    # o seco con cáscara al productor (False, caso base). None = lo fija el motor desde
+    # (True, caso base) o seco con cáscara al productor (False). None = lo fija el motor desde
     # `ParametrosCostos.venta_verde` (ver `_resolver_precio_params()` en
     # src/monte_carlo.py); usado fuera del motor, sigue al Excel (B78).
     venta_verde: bool | None = None

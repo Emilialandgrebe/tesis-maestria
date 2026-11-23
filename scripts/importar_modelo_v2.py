@@ -53,7 +53,7 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "hectareas_referencia": ("Supuestos!B11", "ha", "Superficie a plantar"),
     "plantas_totales": ("Supuestos!B16", "plantas", "Plantas totales"),
     "proporcion_machos": ("Supuestos!B17", "fracción", "Proporción de machos"),
-    "rendimiento_plena_kg_ha": ("Supuestos!B20", "kg seco con cáscara/ha", "Rendimiento a plena producción"),
+    "rendimiento_plena_kg_ha": ("Supuestos!B20", "kg verdes/ha", "Rendimiento a plena producción"),
     "ha_por_sistema_solar": ("Supuestos!B21", "ha", "Hectáreas cubiertas por cada sistema solar"),
     "salario_operario_usd_mes": ("Supuestos!B25", "USD/mes", "Salario base operario"),
     "salario_encargado_usd_mes": ("Supuestos!B26", "USD/mes", "Salario base encargado"),
@@ -73,13 +73,13 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
     "quebrantos_anios": ("Supuestos!B66", "años", "Años de traslado de quebrantos"),
     "activar_opex_pre": ("Supuestos!B67", "0/1", "Activar OPEX pre-productivo como costo de implantación"),
     "vida_util_implantacion": ("Supuestos!B68", "años", "Vida útil del costo de implantación activado"),
-    # Bloque 8: base de ingresos. Factor y proporción SIN VALIDAR con el
+    # Bloque 8: base de ingresos de la alternativa en seco. Factor y proporción SIN VALIDAR con el
     # asesor agronómico: se cambian en el Excel y se vuelve a correr este
     # script (ver ParametrosCostos en src/costos.py).
     "factor_conversion_seco": ("Supuestos!B71", "kg seco/kg de rendimiento", "Factor de conversión rendimiento → seco"),
     "precio_al_productor": ("Supuestos!B72", "0/1", "Precio recibido: 1 = al productor"),
     "proporcion_precio_productor": ("Supuestos!B73", "proporción", "Precio al productor / precio de mercado"),
-    # Bloque 9: venta en verde a la procesadora (alternativa; caso base = 0)
+    # Bloque 9: venta en verde a la procesadora (caso base = 1)
     "venta_verde": ("Supuestos!B78", "0/1", "Venta en verde a la procesadora"),
     "tasa_rf": ("Tasa!B6", "fracción/año", "Tasa libre de riesgo"),
     "prima_mercado": ("Tasa!B7", "fracción/año", "Prima de riesgo de mercado"),
@@ -92,7 +92,7 @@ SUPUESTOS_ESCALARES: dict[str, tuple[str, str, str]] = {
 # Filas de la hoja Supuestos con series por año (columnas D..X = años 0..20)
 SERIES_ANUALES: dict[str, tuple[int, str]] = {
     "rendimiento_pct_plena": (54, "Rendimiento (% de plena producción)"),
-    # Precios AL PRODUCTOR del seco con cáscara (caso base, 5 / 7 / 9)
+    # Precios AL PRODUCTOR del seco con cáscara (alternativa, 5 / 7 / 9)
     "precio_pesimista_usd_kg": (55, "Precio pesimista"),
     "precio_base_usd_kg": (56, "Precio base"),
     "precio_optimista_usd_kg": (57, "Precio optimista"),
@@ -101,7 +101,7 @@ SERIES_ANUALES: dict[str, tuple[int, str]] = {
     # (escenario "plan_original", ver src/modelo_v2.py).
     "precio_plan_original_usd_kg": (58, "Referencia: trayectoria del plan original"),
     "rampa_fertilizacion": (59, "Fertilización y fitosanidad"),
-    # Bloque 9 (alternativa): precios en verde (USD/kg verde pagado por la procesadora)
+    # Bloque 9 (caso base): precios en verde, 2,5 / 4 / 5,5 USD/kg verde pagado por la procesadora
     "precio_verde_pesimista_usd_kg": (80, "Precio en verde – pesimista"),
     "precio_verde_base_usd_kg": (81, "Precio en verde – base"),
     "precio_verde_optimista_usd_kg": (82, "Precio en verde – optimista"),
