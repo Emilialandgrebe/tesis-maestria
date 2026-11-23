@@ -2211,6 +2211,23 @@ pelón, a la procesadora; no lo procesa. Reemplaza el caso seco del
   fijados en verde con el escenario base (precio 4, sin cambios): sus
   outputs siguen valiendo.
 
+**Sustitutos y figuras en verde (2026-11-23, rama `tesis-figuras-verde`).**
+Dataset LHS regenerado con el caso verde (2.400 train + 600 test, LHS
+independientes, 1.000 simulaciones por punto). R² / RMSE / MAE en test:
+VAN medio, RF 0,9756 / 174.267 / 132.219 USD y LightGBM 0,9927 / 95.611 /
+73.216 USD; P(VAN<0), RF 0,8687 / 0,0124 / 0,0030 y LightGBM 0,9078 /
+0,0104 / 0,0035. El R² de P(VAN<0) baja (antes ~0,97-0,98) porque la
+métrica satura: vale 1 en casi todo el espacio (media 0,999 en el base, 1
+en el pesimista) y su varianza es mínima; el error absoluto es chico. En
+el RF del VAN medio la variable más importante pasa a ser `hectareas`
+(0,38): con VAN negativo, más superficie escala la pérdida. Figuras a 300
+dpi en `outputs/figuras/` (`scripts/figuras_tesis.py`): mapa de calor de
+P(VAN<0) de la grilla y tornado de Sobol bayesiano (VAN medio y CVaR 10 %).
+VAN determinístico del caso base verde según el tratamiento fiscal:
+quebrantos sí −2.836.458,08 (TIR 1,42 %), sin quebrantos −2.946.760,77
+(0,73 %), quebrantos + activación del OPEX pre-productivo −2.818.954,11
+(1,67 %), sin quebrantos + activación −2.891.846,60 (1,23 %).
+
 ### Paso 7 — próximos pasos (anotados 2026-11-19, sin implementar)
 
 1. **Precio bayesiano** (pedido de Ezequiel). Poner priors sobre los
